@@ -4,6 +4,7 @@ import gerber
 import shutil
 import logzero
 import logging
+import math
 from pathlib import Path
 from zipfile import ZipFile
 import xml.etree.ElementTree as ET
@@ -44,6 +45,10 @@ class Panel:
     # list of tuples of x, y locations for each mousebite locations
     mousebite_coords = list()
 
+    # Options that are used a lot, taken from the config file
+    route_diameter = 0
+    decimal_precision = 0
+
     def __init__(self):
         self.logger = logzero.logger
         logzero.loglevel(logging.DEBUG)
@@ -64,6 +69,10 @@ class Panel:
 
         self.config.read(self.config_file_path)
         self.logger.debug("Config sections: {}".format(self.config.sections()))
+
+        _panel_options = self.config["PanelOptions"]
+        self.route_diameter = float(_panel_options["route_diameter"])
+        self.decimal_precision = int(_panel_options["decimal_precision"])
 
     def _load_file(self):
         """
@@ -163,8 +172,8 @@ class Panel:
             _unified_location[0] = _location[0]
             _unified_location[1] = _location[1]
 
-            _mousebite_x_distance = (self.pcb_info['size_x'] / 2) + (float(self.config["PanelOptions"]["route_diameter"]) / 2)
-            _mousebite_y_distance = (self.pcb_info['size_y'] / 2) + (float(self.config["PanelOptions"]["route_diameter"]) / 2)
+            _mousebite_x_distance = (self.pcb_info['size_x'] / 2) + (self.route_diameter / 2)
+            _mousebite_y_distance = (self.pcb_info['size_y'] / 2) + (self.route_diameter / 2)
 
             # Adjustment of the mousebite in the x and y direction to compensate for the mousebite 'diameter' on the edge of boards
             _mousebite_adjustment = [0, 0]
@@ -209,7 +218,8 @@ class Panel:
         self.logger.info("PCB Size: {}mm x {}mm".format(self.pcb_info['size_x'], self.pcb_info['size_y']))
 
         while 1:
-            self.logger.info("Repeat:")
+            self.logger.info("= Repeat =")
+            self.logger.info("How many boards to arrange in the X and Y directions")
             _x_repeat = self._try_int(input("X Repeat: "))
             _y_repeat = self._try_int(input("Y Repeat: "))
 
@@ -218,12 +228,84 @@ class Panel:
 
             self.logger.info("Panel Size: {}mm x {}mm".format(self.panel_info["width"], self.panel_info["height"]))
 
-            _bounds_ok = input("Bounds acceptable? (Y/N): ") or "Y"
-            if _bounds_ok.upper() == "Y":
+            _size_ok = input("Panel size acceptable? (Y/N): ") or "Y"
+            if _size_ok.upper() == "Y":
                 break
 
         self.logger.info("")
-        self.logger.info("Mousebite locations")
+        _horiz_bars_every = 0
+        _vert_bars_every = 0
+
+        while 1:
+            self.logger.info("= Inter-board support bars =")
+            self.logger.info("These are extra bits of panel in the X and/or Y direction that add support for odd shaped boards")
+
+            _add_bars = input("Add inter-board support bars? (Y/N): ") or "Y"
+            if _add_bars.upper() == "N":
+                break
+
+            # User has selected to add support bars so make "Y" into a boolean variable for easier logic
+            _add_bars = 1
+            _input = input("Add horizontal support bars? (Y/N): ") or "N"
+            if _input.upper() == "Y":
+                _horiz_bars_every = input("Horizontal supports ever Y PCBs: ")
+                try:
+                    _horiz_bars_every = int(_horiz_bars_every)
+                except ValueError:
+                    self.logger.error("{} is not an integer".format(_horiz_bars_every))
+                    continue
+
+                if _horiz_bars_every <= 0:
+                    self.logger.error("Input needs to be greater than 0")
+                    continue
+
+            _input = input("Add vertical support bars? (Y/N): ") or "N"
+            if _input.upper() == "Y":
+                _vert_bars_every = input("Vertical supports ever X PCBs: ")
+                try:
+                    _vert_bars_every = int(_vert_bars_every)
+                except ValueError:
+                    self.logger.error("{} is not an integer".format(_vert_bars_every))
+                    continue
+
+                if _vert_bars_every <= 0:
+                    self.logger.error("Input needs to be greater than 0")
+                    continue
+
+            # need to update the bounds of the pcb maybe
+            if _vert_bars_every != 0:
+                # Fence post vs holes problem, need to take 1 from the repeat to get the number of holes in the pcb array
+                self.logger.debug("Vertical supports every: {}, total: {}".format(_vert_bars_every, math.floor((_x_repeat - 1) / _vert_bars_every)))
+                # Find out how many supports we need to add then multiply that by the extra height added by one support and one router width
+                # The router width the other side of the support is already taken care of in the case of a normal array w/o supports
+                _extra_width = math.floor((_x_repeat - 1) / _vert_bars_every) * (float(self.config["PanelOptions"]["support_bar_width"]) + self.route_diameter)
+                self.panel_info["width"] += _extra_width
+
+                # Issue a warning to the user if the maths doesn't quite work
+                if ((_x_repeat - 1) % _vert_bars_every) != 0:
+                    self.logger.warning("Chosen number of vertical support not easily divisible by the number of PCBs")
+                    self.logger.warning("Support bars may not be placed evenly")
+
+            if _horiz_bars_every != 0:
+                self.logger.debug("Horizontal supports every: {}, total: {}".format(_horiz_bars_every, math.floor((_y_repeat - 1) / _horiz_bars_every)))
+                _extra_height = math.floor((_y_repeat - 1) / _horiz_bars_every) * (float(self.config["PanelOptions"]["support_bar_width"]) + self.route_diameter)
+                self.panel_info["height"] += _extra_height
+
+                # Issue a warning to the user if the maths doesn't quite work
+                if ((_y_repeat - 1) % _horiz_bars_every) != 0:
+                    self.logger.warning("Chosen number of vertical support not easily divisible by the number of PCBs")
+                    self.logger.warning("Support bars may not be placed evenly")
+
+            # Update the user on the new bounds of the panel
+            if _horiz_bars_every != 0 or _vert_bars_every != 0:
+                self.logger.info("New panel Size: {}mm x {}mm".format(self.panel_info["width"], self.panel_info["height"]))
+
+            _size_ok = input("Panel size acceptable? (Y/N): ") or "Y"
+            if _size_ok.upper() == "Y":
+                break
+
+        self.logger.info("")
+        self.logger.info("= Mousebite locations =")
         self.logger.info("Locations are on a per board basis, any duplicate locations will be ignored")
         self.logger.info("Each location is 2 letters, the first being alignment, the second being location")
         self.logger.info("E.g. 'cb' will put a mousebite center-bottom,")
@@ -242,9 +324,9 @@ class Panel:
 
         self.logger.info("")
         self.logger.info("Mousebite locations list:")
-        # _mousebite_list = input("Locations: ")
-        # _mousebite_list = _mousebite_list.replace(' ', '').split(',')
-        _mousebite_list = ['cb', 'ct']
+        _mousebite_list = input("Locations: ")
+        _mousebite_list = _mousebite_list.replace(' ', '').split(',')
+        # _mousebite_list = ['cb', 'ct']
 
         self.logger.debug("Locations list: {}".format(_mousebite_list))
 
@@ -252,8 +334,8 @@ class Panel:
         _mousebite_list = set(_mousebite_list)
         _mousebite_primitives = self._make_mousebite_primitave_array(_mousebite_list)
 
-        _x_start = float(self.config["PanelOptions"]["panel_width"]) + float(self.config["PanelOptions"]["route_diameter"]) + self.pcb_info['origin_x']
-        _y_start = float(self.config["PanelOptions"]["panel_width"]) + float(self.config["PanelOptions"]["route_diameter"]) + self.pcb_info['origin_y']
+        _x_start = float(self.config["PanelOptions"]["panel_width"]) + self.route_diameter + self.pcb_info['origin_x']
+        _y_start = float(self.config["PanelOptions"]["panel_width"]) + self.route_diameter + self.pcb_info['origin_y']
         _x_loc = _x_start
         _y_loc = _y_start
 
@@ -267,10 +349,19 @@ class Panel:
                 for bite in _mousebite_primitives:
                     self.mousebite_coords.append((_x_loc + bite[0], _y_loc + bite[1]))
 
-                _x_loc += self.pcb_info['size_x'] + float(self.config["PanelOptions"]["route_diameter"])
+                _x_loc += self.pcb_info['size_x'] + self.route_diameter
+
+                # Add the the support bar width to the next x location if we need to
+                # x_index will start at 0 so need to add 1 to get the intended result from the modulus function
+                if (_vert_bars_every != 0) and ((x_index + 1) % _vert_bars_every == 0):
+                    _x_loc += float(self.config["PanelOptions"]["support_bar_width"]) + self.route_diameter
 
             _x_loc = _x_start
-            _y_loc += self.pcb_info['size_y'] + float(self.config["PanelOptions"]["route_diameter"])
+            _y_loc += self.pcb_info['size_y'] + self.route_diameter
+
+            # Add the support bar width to the next y location if we need to
+            if (_horiz_bars_every != 0) and ((y_index + 1) % _horiz_bars_every == 0):
+                _y_loc += float(self.config["PanelOptions"]["support_bar_width"]) + self.route_diameter
 
         self.logger.debug("PCB Coords: {}".format(self.pbc_coords))
 
@@ -295,8 +386,8 @@ class Panel:
             gerber_instance = ET.SubElement(instances, "GerberInstance")
             center = ET.SubElement(gerber_instance, "Center")
             # X and Y location of each thing
-            ET.SubElement(center, "X").text = str(_loc[0])
-            ET.SubElement(center, "Y").text = str(_loc[1])
+            ET.SubElement(center, "X").text = str(round(_loc[0], self.decimal_precision))
+            ET.SubElement(center, "Y").text = str(round(_loc[1], self.decimal_precision))
             # Gerber rotation angle = 0
             ET.SubElement(gerber_instance, "Angle").text = str(0)
             # Tell GP which gerber file this is for
@@ -310,8 +401,8 @@ class Panel:
             breaktab = ET.SubElement(tabs, "BreakTab")
             center = ET.SubElement(breaktab, "Center")
             # X and Y location of each thing
-            ET.SubElement(center, "X").text = str(_tab[0])
-            ET.SubElement(center, "Y").text = str(_tab[1])
+            ET.SubElement(center, "X").text = str(round(_tab[0], self.decimal_precision))
+            ET.SubElement(center, "Y").text = str(round(_tab[1], self.decimal_precision))
             # tab rotation angle = 0
             ET.SubElement(breaktab, "Angle").text = str(0)
             ET.SubElement(breaktab, "Radius").text = str(self.config['PanelOptions']['mousebite_diameter'])
@@ -319,13 +410,13 @@ class Panel:
             ET.SubElement(breaktab, "Valid").text = "false"
 
         # EOF settings and configurations
-        ET.SubElement(root, "Width").text = str(self.panel_info['width'])
-        ET.SubElement(root, "Height").text = str(self.panel_info['height'])
-        ET.SubElement(root, "MarginBetweenBoards").text = str(self.config['PanelOptions']['route_diameter'])
+        ET.SubElement(root, "Width").text = str(round(self.panel_info['width'], self.decimal_precision))
+        ET.SubElement(root, "Height").text = str(round(self.panel_info['height'], self.decimal_precision))
+        ET.SubElement(root, "MarginBetweenBoards").text = str(self.route_diameter)
         # Fill the outside of the board
         ET.SubElement(root, "ConstructNegativePolygon").text = "true"
         # There is an issue with odd sized boards where GP will think breaktabs are invalid sometimes
-        ET.SubElement(root, "FillOffset").text = str(float(self.config['PanelOptions']['route_diameter']) + 0.01)
+        ET.SubElement(root, "FillOffset").text = str(self.route_diameter + 0.01)
         ET.SubElement(root, "Smoothing").text = str(1)
         ET.SubElement(root, "ExtraTabDrillDistance").text = str(0)
         # This can sometimes cause issues if the silk layer is over the edge of the board
@@ -361,7 +452,7 @@ class Panel:
     def _try_int(self, _input):
         """
         Checks whether a user input can bed turned into an in, otherwise throws an error
-        :param input: user input that may be a number
+        :param _input: user input that may be a number
         :return: int
         """
 
