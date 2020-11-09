@@ -40,14 +40,16 @@ class Panel:
     mousebite_locations = {"b": {"name": "bottom", "translation": (0, -1)}, "t": {"name": "top", "translation": (0, 1)},
                            "l": {"name": "left", "translation": (-1, 0)}, "r": {"name": "right", "translation": (1, 0)}}
     # the translation is a single unit direction for which way the alignment should go if it is imagined in the x direction only
-    mousebite_alignments = {"c": {"name": "center", "translation": 0}, "x": {"name": "left", "translation": -1},
-                            "v": {"name": "right", "translation": 1}}
+    mousebite_alignments = {"c": {"name": "center", "translation": 0}, "l": {"name": "left", "translation": -1},
+                            "r": {"name": "right", "translation": 1}, "v": {"name": "left 2/3", "translation": -0.6},
+                            "x": {"name": "right 2/3", "translation": 0.6}}
     # list of tuples of x, y locations for each mousebite locations
     mousebite_coords = list()
 
     # Options that are used a lot, taken from the config file
     route_diameter = 0
     decimal_precision = 0
+    mousebite_diameter = 0
 
     def __init__(self):
         self.logger = logzero.logger
@@ -73,6 +75,7 @@ class Panel:
         _panel_options = self.config["PanelOptions"]
         self.route_diameter = float(_panel_options["route_diameter"])
         self.decimal_precision = int(_panel_options["decimal_precision"])
+        self.mousebite_diameter = float(_panel_options["mousebite_diameter"])
 
     def _load_file(self):
         """
@@ -136,7 +139,7 @@ class Panel:
         Takes in a list of mousebite locations and works out the relative coords of them in relation to the PCB
         offsets are calculated in relation to the PCB origin
         :param mousebite_list:
-        :return: list of tuples of x, y locations for the relative coors
+        :return: list of tuples of x, y locations for the relative coords
         """
         self.logger.debug("Building mousebite primitive array")
         _primative_array = list()
@@ -151,13 +154,13 @@ class Panel:
             # self.logger.debug("Parsing mousebite location: {}".format(location))
 
             try:
-                _location = self.mousebite_locations[location[1]]['translation']
+                _location = self.mousebite_locations[location[0]]['translation']
             except KeyError:
                 self.logger.debug("Key '{}' not found in location array".format(location[0]))
                 _error = 1
 
             try:
-                _alignment = self.mousebite_alignments[location[0]]['translation']
+                _alignment = self.mousebite_alignments[location[1]]['translation']
             except KeyError:
                 _error = 1
 
@@ -180,22 +183,52 @@ class Panel:
 
             # first translation is in the x direction
             if _location[0] != 0:
-                # Get whether the alignment is positive or negative
-                _mousebite_adjustment[1] = self._get_sign(_alignment)
+                # Consider only positive direction
+                _center_to_bite_edge = (abs(_alignment) * (self.pcb_info['size_y'] / 2)) + self.mousebite_diameter
+                # Convert to actual direction of the mousebite
+                _center_to_bite_edge *= self._get_sign(_alignment)
+                self.logger.debug("Center to bite edge Y: {}".format(_center_to_bite_edge))
+
+                if abs(_center_to_bite_edge) > (self.pcb_info['size_y'] / 2):
+                    # Mousebite will end up off the edge of the PCB to move it in by the diameter of the bite
+                    _mousebite_adjustment[1] = (self.pcb_info['size_y'] / 2) - self.mousebite_diameter
+                    # Change the sign so the direction is correct
+                    _mousebite_adjustment[1] *= self._get_sign(_alignment)
+                else:
+                    # Get whether the alignment is positive or negative
+                    _mousebite_adjustment[1] = self._get_sign(_alignment) * _center_to_bite_edge
+
+                self.logger.debug("Mousebite Y adjustment: {}".format(_mousebite_adjustment[0]))
                 _unified_location[1] += _alignment
 
             # first translation is in the y direction
             if _location[1] != 0:
-                _mousebite_adjustment[0] = self._get_sign(_alignment)
+                # Consider only positive direction
+                _center_to_bite_edge = (abs(_alignment) * (self.pcb_info['size_x'] / 2)) + self.mousebite_diameter
+                # Convert to actual direction of the mousebite
+                _center_to_bite_edge *= self._get_sign(_alignment)
+                self.logger.debug("Center to bite edge X: {}".format(_center_to_bite_edge))
+
+                if abs(_center_to_bite_edge) > (self.pcb_info['size_x'] / 2):
+                    # Mousebite will end up off the edge of the PCB to move it in by the diameter of the bite
+                    _mousebite_adjustment[0] = (self.pcb_info['size_x'] / 2) - self.mousebite_diameter
+                    # Change the sign so the direction is correct
+                    _mousebite_adjustment[0] *= self._get_sign(_alignment)
+                else:
+                    # Get whether the alignment is positive or negative
+                    _mousebite_adjustment[0] = self._get_sign(_alignment) * _center_to_bite_edge
+
+                self.logger.debug("Mousebite X adjustment: {}".format(_mousebite_adjustment[0]))
                 _unified_location[0] += _alignment
 
             self.logger.debug("Unified location vector: {}".format(_location))
 
             # convert the unit vector location to a location on the PCB bounding box
-            _x_vector = (_location[0] * _mousebite_x_distance) + _mousebite_adjustment[0] * float(self.config["PanelOptions"]["mousebite_diameter"])
-            _y_vector = (_location[1] * _mousebite_y_distance) + _mousebite_adjustment[0] * float(self.config["PanelOptions"]["mousebite_diameter"])
+            _x_vector = (_location[0] * _mousebite_x_distance) + _mousebite_adjustment[0]
+            _y_vector = (_location[1] * _mousebite_y_distance) + _mousebite_adjustment[1]
             self.logger.debug("Mousebite location on pcb: ({}, {})".format(_x_vector, _y_vector))
 
+            # Find the offset from the origin of the PCB to the center of the PCB
             _x_origin_to_center = (self.pcb_info['size_x'] / 2) - self.pcb_info['origin_x']
             _y_origin_to_center = (self.pcb_info['size_y'] / 2) - self.pcb_info['origin_y']
 
@@ -248,7 +281,7 @@ class Panel:
             _add_bars = 1
             _input = input("Add horizontal support bars? (Y/N): ") or "N"
             if _input.upper() == "Y":
-                _horiz_bars_every = input("Horizontal supports ever Y PCBs: ")
+                _horiz_bars_every = input("Horizontal supports every Y PCBs: ")
                 try:
                     _horiz_bars_every = int(_horiz_bars_every)
                 except ValueError:
@@ -261,7 +294,7 @@ class Panel:
 
             _input = input("Add vertical support bars? (Y/N): ") or "N"
             if _input.upper() == "Y":
-                _vert_bars_every = input("Vertical supports ever X PCBs: ")
+                _vert_bars_every = input("Vertical supports every X PCBs: ")
                 try:
                     _vert_bars_every = int(_vert_bars_every)
                 except ValueError:
@@ -313,20 +346,20 @@ class Panel:
         self.logger.info("Mousebite locations are not case sensitive, and are placed naively")
 
         self.logger.info("")
-        self.logger.info("Alignments:")
-        for key, value in self.mousebite_alignments.items():
+        self.logger.info("Locations:")
+        for key, value in self.mousebite_locations.items():
             self.logger.info("{}: {}".format(key.upper(), value["name"].title()))
 
         self.logger.info("")
-        self.logger.info("Locations:")
-        for key, value in self.mousebite_locations.items():
+        self.logger.info("Alignments:")
+        for key, value in self.mousebite_alignments.items():
             self.logger.info("{}: {}".format(key.upper(), value["name"].title()))
 
         self.logger.info("")
         self.logger.info("Mousebite locations list:")
         _mousebite_list = input("Locations: ")
         _mousebite_list = _mousebite_list.replace(' ', '').split(',')
-        # _mousebite_list = ['cb', 'ct']
+        # _mousebite_list = ['bl']
 
         self.logger.debug("Locations list: {}".format(_mousebite_list))
 
@@ -405,7 +438,7 @@ class Panel:
             ET.SubElement(center, "Y").text = str(round(_tab[1], self.decimal_precision))
             # tab rotation angle = 0
             ET.SubElement(breaktab, "Angle").text = str(0)
-            ET.SubElement(breaktab, "Radius").text = str(self.config['PanelOptions']['mousebite_diameter'])
+            ET.SubElement(breaktab, "Radius").text = str(self.mousebite_diameter)
             # Don't know why the valid tag is always false, but it is
             ET.SubElement(breaktab, "Valid").text = "false"
 
