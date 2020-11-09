@@ -5,6 +5,7 @@ import shutil
 import logzero
 import logging
 import math
+import datetime
 from pathlib import Path
 from zipfile import ZipFile
 import xml.etree.ElementTree as ET
@@ -27,7 +28,7 @@ class Panel:
 
     # {size_x, size_y, origin_x, origin_y}
     pcb_info = dict()
-    # {width, height}
+    # {width, height, repeat_x, repeat_y, step_x, step_y}
     panel_info = dict()
 
     # list of tuples of x, y locations for each pcb instance
@@ -50,6 +51,9 @@ class Panel:
     route_diameter = 0
     decimal_precision = 0
     mousebite_diameter = 0
+    profile_file_extensions = None
+    # If the gerber file contains any of these then ignore it
+    ignored_file_parts = ['._', '.DS_STORE']
 
     def __init__(self):
         self.logger = logzero.logger
@@ -77,6 +81,8 @@ class Panel:
         self.decimal_precision = int(_panel_options["decimal_precision"])
         self.mousebite_diameter = float(_panel_options["mousebite_diameter"])
 
+        self.profile_file_extensions = _panel_options["profile_file_extension"].replace(' ', '').split(',')
+
     def _load_file(self):
         """
         Loads a single file to be turned into an array
@@ -93,16 +99,20 @@ class Panel:
         if self.gerber_file_path.suffix == ".zip":
             with ZipFile(self.gerber_file_path, 'r') as zip_file:
                 for file in zip_file.namelist():
-                    self.logger.debug("File from zip archive: {}".format(file))
-                    if '.gko' in file:
-                        # Got a profile file, now we can have a look at the max bounds of the file
-                        self.logger.debug("Found a profile file")
-                        self.logger.info("Profile file name: {}".format(file))
-                        _found_profile_file = file
+                    _file_name = Path(file).name
 
-                        # Extract profile file to temp dir
-                        zip_file.extract(file, str(self.temp_path))
-                        break
+                    # First check that the file is not in the ignored list
+                    if True not in [part in _file_name for part in self.ignored_file_parts]:
+                        self.logger.debug("File from zip archive: {}".format(_file_name))
+                        if True in [ext in _file_name for ext in self.profile_file_extensions]:
+                            # Got a profile file, now we can have a look at the max bounds of the file
+                            self.logger.debug("Found a profile file")
+                            self.logger.info("Profile file name: {}".format(_file_name))
+                            _found_profile_file = file
+
+                            # Extract profile file to temp dir
+                            zip_file.extract(file, str(self.temp_path))
+                            break
 
         else:
             self._exit_error("Can't load file, needs to be a .zip.")
@@ -114,20 +124,20 @@ class Panel:
             _current_units = read_pcb.units
             if _current_units == "metric":
                 self.logger.info("PCB units are metric, no conversion required")
-            elif _current_units == "imperial":
+            elif _current_units == "inch":
                 self.logger.info("PCB units are imperial, converting to metric")
                 read_pcb.to_metric()
 
             # bounds is a tuple of the form ((min_x, max_x), (min_y, max_y))
             pcb_bounds = read_pcb.bounds
 
-            self.pcb_info["size_x"] = pcb_bounds[0][1] - pcb_bounds[0][0]
-            self.pcb_info["size_y"] = pcb_bounds[1][1] - pcb_bounds[1][0]
+            self.pcb_info["size_x"] = round(pcb_bounds[0][1] - pcb_bounds[0][0], 6)
+            self.pcb_info["size_y"] = round(pcb_bounds[1][1] - pcb_bounds[1][0], 6)
 
             # origin is how far away the bottom left corner of the pcb is to the 'origin' of the board
             # need to flip the sign to get the coord of the origin wrt the bl corner
-            self.pcb_info["origin_x"] = pcb_bounds[0][0] * -1
-            self.pcb_info["origin_y"] = pcb_bounds[1][0] * -1
+            self.pcb_info["origin_x"] = round(pcb_bounds[0][0] * -1, 6)
+            self.pcb_info["origin_y"] = round(pcb_bounds[1][0] * -1, 6)
 
             self.logger.info("PCB info: {}".format(self.pcb_info))
 
@@ -256,14 +266,22 @@ class Panel:
             _x_repeat = self._try_int(input("X Repeat: "))
             _y_repeat = self._try_int(input("Y Repeat: "))
 
-            self.panel_info["width"] = 10 + ((self.pcb_info['size_x'] + 2.0) * float(_x_repeat)) + 8
-            self.panel_info["height"] = 10 + ((self.pcb_info['size_y'] + 2.0) * float(_y_repeat)) + 8
+            # TODO make these number come from the config file
+            self.panel_info["width"] = round(10 + ((self.pcb_info['size_x'] + self.route_diameter) * float(_x_repeat)) + 8, 6)
+            self.panel_info["height"] = round(10 + ((self.pcb_info['size_y'] + self.route_diameter) * float(_y_repeat)) + 8, 6)
 
+            self.logger.info("Total number of PCBs in panel: {}".format(_x_repeat * _y_repeat))
             self.logger.info("Panel Size: {}mm x {}mm".format(self.panel_info["width"], self.panel_info["height"]))
 
             _size_ok = input("Panel size acceptable? (Y/N): ") or "Y"
             if _size_ok.upper() == "Y":
                 break
+
+        # Store panel info for report generation
+        self.panel_info["repeat_x"] = _x_repeat
+        self.panel_info["repeat_y"] = _y_repeat
+        self.panel_info["step_x"] = self.pcb_info['size_x'] + self.route_diameter
+        self.panel_info["step_y"] = self.pcb_info['size_y'] + self.route_diameter
 
         self.logger.info("")
         _horiz_bars_every = 0
@@ -337,7 +355,6 @@ class Panel:
             if _size_ok.upper() == "Y":
                 break
 
-        self.logger.info("")
         self.logger.info("= Mousebite locations =")
         self.logger.info("Locations are on a per board basis, any duplicate locations will be ignored")
         self.logger.info("Each location is 2 letters, the first being alignment, the second being location")
@@ -472,12 +489,35 @@ class Panel:
         self.logger.info("Gerberset written successfully!")
         self.logger.info("File is located at: {}".format(str(_out_path)))
 
+    def _write_report(self):
+        """
+        Writes a report file to help with ordering the panel
+        :return:
+        """
+        self.logger.info("== Writing panel generation report ==")
+
+        _out_path = self.gerber_file_path.parent / (self.gerber_file_path.stem + "-report.txt")
+        with open(_out_path, 'w') as out:
+            out.write("=" * 40 + "\n")
+            out.write("Panel file generation report\n")
+            out.write("File generated on: {}\n".format(datetime.datetime.now().strftime("%H:%M %b/%d/%Y")))
+            out.write("Gerberset path: {}\n".format(str(self.gerber_file_path.parent / (self.gerber_file_path.stem + "-panel.gerberset"))))
+            out.write("=" * 40 + "\n")
+            out.write("\n")
+
+            out.write("Total number of PCBs on panel: {}\n".format(self.panel_info["repeat_x"] * self.panel_info["repeat_y"]))
+            out.write("Repeat X*Y: {} x {}\n".format(self.panel_info["repeat_x"], self.panel_info["repeat_y"]))
+            out.write("Step X*Y: {}mm x {}mm\n".format(self.panel_info["step_x"], self.panel_info["step_y"]))
+            out.write("\n")
+
+            out.write("PCB size: {}mm x {}mm\n".format(self.pcb_info["size_x"], self.pcb_info["size_y"]))
+
     def _clean_tempfiles(self):
         """
         Cleans up the temp directory after finishing
         :return:
         """
-        self.logger.info("Cleaning up tempfiles")
+        self.logger.info("== Cleaning up tempfiles ==")
         self.logger.debug("Tempfile directory: {}".format(str(self.temp_path)))
 
         shutil.rmtree(self.temp_path)
@@ -515,6 +555,7 @@ class Panel:
         if message:
             self.logger.error(message)
 
+        self._clean_tempfiles()
         exit(-1)
 
     def on_execute(self):
@@ -524,6 +565,7 @@ class Panel:
         self._load_file()
         self._make_array()
         self._clean_tempfiles()
+        self._write_report()
         self._write_xml()
 
 
