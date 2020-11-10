@@ -155,7 +155,7 @@ class Panel:
         else:
             self._exit_error("No profile file found in zip, does it have the extension .gko?")
 
-    def _make_mousebite_primitave_array(self, mousebite_list):
+    def _make_mousebite_primitive_array(self, mousebite_list):
         """
         Takes in a list of mousebite locations and works out the relative coords of them in relation to the PCB
         offsets are calculated in relation to the PCB origin
@@ -163,7 +163,7 @@ class Panel:
         :return: list of tuples of x, y locations for the relative coords
         """
         self.logger.debug("Building mousebite primitive array")
-        _primative_array = list()
+        _primitive_array = list()
 
         for location in mousebite_list:
             # loop through the list of locations that the user has entered
@@ -251,10 +251,10 @@ class Panel:
             _primitive_x = round(_x_vector + _x_origin_to_center, 6)
             _primitive_y = round(_y_vector + _y_origin_to_center, 6)
             # Append vector tuple to array
-            _primative_array.append((_primitive_x, _primitive_y))
+            _primitive_array.append((_primitive_x, _primitive_y))
 
-        self.logger.debug("Primative array: {}".format(_primative_array))
-        return _primative_array
+        self.logger.debug("Primitive array: {}".format(_primitive_array))
+        return _primitive_array
 
     def _make_array(self):
         """
@@ -383,16 +383,7 @@ class Panel:
         self.logger.info("E.g. 'cb' will put a mousebite center-bottom,")
         self.logger.info("'cb,ct' will put mousebites at the center-bottom and the center-top")
         self.logger.info("Mousebite locations are not case sensitive, and are placed naively")
-
         self.logger.info("")
-        # self.logger.info("Locations:")
-        # for key, value in self.mousebite_locations.items():
-        #     self.logger.info("{}: {}".format(key.upper(), value["name"].title()))
-        #
-        # self.logger.info("")
-        # self.logger.info("Alignments:")
-        # for key, value in self.mousebite_alignments.items():
-        #     self.logger.info("{}: {}".format(key.upper(), value["name"].title()))
 
         # Dsiplay mousebite locations table
         self.logger.info("   tl  tx   tc  tv  tr   ")
@@ -423,7 +414,8 @@ class Panel:
 
         # Remove duplicates from the location list
         _mousebite_list = set(_mousebite_list)
-        _mousebite_primitives = self._make_mousebite_primitave_array(_mousebite_list)
+        _mousebite_primitives = self._make_mousebite_primitive_array(_mousebite_list)
+        _mousebite_coords = list()
 
         _x_start = float(self.config["PanelOptions"]["panel_width"]) + self.route_diameter + self.pcb_info['origin_x']
         _y_start = float(self.config["PanelOptions"]["panel_width"]) + self.route_diameter + self.pcb_info['origin_y']
@@ -438,7 +430,7 @@ class Panel:
                 # mousebite x, y are located from the center of the mousebite
                 self.pbc_coords.append((round(_x_loc, 6), round(_y_loc, 6)))
                 for bite in _mousebite_primitives:
-                    self.mousebite_coords.append((round(_x_loc + bite[0], 6), round(_y_loc + bite[1], 6)))
+                    _mousebite_coords.append((round(_x_loc + bite[0], 6), round(_y_loc + bite[1], 6)))
 
                 _x_loc += self.pcb_info['size_x'] + self.route_diameter
 
@@ -457,7 +449,7 @@ class Panel:
         self.logger.debug("PCB Coords: {}".format(self.pbc_coords))
 
         # Remove any duplicates from the mousebite coords array
-        self.mousebite_coords = set(self.mousebite_coords)
+        self.mousebite_coords = set(_mousebite_coords)
         self.logger.debug("Mousebite Coords: {}".format(self.mousebite_coords))
 
     def _write_xml(self):
@@ -618,7 +610,6 @@ class Panel:
         self._write_xml()
 
 
-# Press the green button in the gutter to run the script.
 if __name__ == '__main__':
     app = Panel()
     app.on_execute()
