@@ -18,6 +18,8 @@ class Panel:
     Panelises a single gerber file into an array with mousebites, output it as an xml file that can
     be loaded straight into gerber panelizer so it can merged into one file.
     """
+    _version = 1.2
+
     temp_path = Path.cwd() / "temp"
 
     config_file_path = Path.cwd() / "config.ini"
@@ -40,20 +42,24 @@ class Panel:
     # for the locations the unit vector must be an (x, y) tuple that translates in only one direction
     mousebite_locations = {"b": {"name": "bottom", "translation": (0, -1)}, "t": {"name": "top", "translation": (0, 1)},
                            "l": {"name": "left", "translation": (-1, 0)}, "r": {"name": "right", "translation": (1, 0)}}
+
     # the translation is a single unit direction for which way the alignment should go if it is imagined in the x direction only
-    mousebite_alignments = {"c": {"name": "center", "translation": 0}, "l": {"name": "left", "translation": -1},
-                            "r": {"name": "right", "translation": 1}, "v": {"name": "left 2/3", "translation": -0.6},
-                            "x": {"name": "right 2/3", "translation": 0.6}}
+    mousebite_alignments = {"c": {"name": "center", "translation": 0}, "l": {"name": "left", "translation": -0.8},
+                            "r": {"name": "right", "translation": 0.8}, "x": {"name": "left 1/3", "translation": -0.5},
+                            "v": {"name": "right 1/3", "translation": 0.5}}
     # list of tuples of x, y locations for each mousebite locations
     mousebite_coords = list()
 
     # Options that are used a lot, taken from the config file
-    route_diameter = 0
-    decimal_precision = 0
-    mousebite_diameter = 0
+    route_diameter = None
+    decimal_precision = None
+    mousebite_diameter = None
+    # Max dimensions before a warning is generated
+    max_panel_dimensions = None
+    panel_frame_width = None
     profile_file_extensions = None
     # If the gerber file contains any of these then ignore it
-    ignored_file_parts = ['._', '.DS_STORE']
+    ignored_file_starts = ['._', '.DS_Store']
 
     def __init__(self):
         self.logger = logzero.logger
@@ -80,8 +86,13 @@ class Panel:
         self.route_diameter = float(_panel_options["route_diameter"])
         self.decimal_precision = int(_panel_options["decimal_precision"])
         self.mousebite_diameter = float(_panel_options["mousebite_diameter"])
+        self.panel_frame_width = float(_panel_options["panel_width"])
 
         self.profile_file_extensions = _panel_options["profile_file_extension"].replace(' ', '').split(',')
+
+        # Config file stores everything as strings
+        _max_dims = _panel_options["max_panel_dimensions"].replace(' ', '').split(',')
+        self.max_panel_dimensions = [float(x) for x in _max_dims]
 
     def _load_file(self):
         """
@@ -102,7 +113,7 @@ class Panel:
                     _file_name = Path(file).name
 
                     # First check that the file is not in the ignored list
-                    if True not in [part in _file_name for part in self.ignored_file_parts]:
+                    if True not in [part.startswith(_file_name) for part in self.ignored_file_starts]:
                         self.logger.debug("File from zip archive: {}".format(_file_name))
                         if True in [ext in _file_name for ext in self.profile_file_extensions]:
                             # Got a profile file, now we can have a look at the max bounds of the file
@@ -181,69 +192,66 @@ class Panel:
             self.logger.debug("User entered location: {}".format(location))
             self.logger.debug("Location: {} - Alignment: {}".format(_location, _alignment))
 
-            # protect location tuples from being edited
-            _unified_location[0] = _location[0]
-            _unified_location[1] = _location[1]
-
             _mousebite_x_distance = (self.pcb_info['size_x'] / 2) + (self.route_diameter / 2)
             _mousebite_y_distance = (self.pcb_info['size_y'] / 2) + (self.route_diameter / 2)
 
             # Adjustment of the mousebite in the x and y direction to compensate for the mousebite 'diameter' on the edge of boards
             _mousebite_adjustment = [0, 0]
+            # Small extra adjustment to move the mousebite away from corners
+            # This also takes into  account the radius
+            _extra_adjustment_for_bite = 1.2
+
+            _size_key = None
+            _alignment_index = None
+            _direction = None
 
             # first translation is in the x direction
             if _location[0] != 0:
-                # Consider only positive direction
-                _center_to_bite_edge = (abs(_alignment) * (self.pcb_info['size_y'] / 2)) + self.mousebite_diameter
-                # Convert to actual direction of the mousebite
-                _center_to_bite_edge *= self._get_sign(_alignment)
-                self.logger.debug("Center to bite edge Y: {}".format(_center_to_bite_edge))
-
-                if abs(_center_to_bite_edge) > (self.pcb_info['size_y'] / 2):
-                    # Mousebite will end up off the edge of the PCB to move it in by the diameter of the bite
-                    _mousebite_adjustment[1] = (self.pcb_info['size_y'] / 2) - self.mousebite_diameter
-                    # Change the sign so the direction is correct
-                    _mousebite_adjustment[1] *= self._get_sign(_alignment)
-                else:
-                    # Get whether the alignment is positive or negative
-                    _mousebite_adjustment[1] = self._get_sign(_alignment) * _center_to_bite_edge
-
-                self.logger.debug("Mousebite Y adjustment: {}".format(_mousebite_adjustment[0]))
-                _unified_location[1] += _alignment
+                _size_key = "size_y"
+                _alignment_index = 1
+                _direction = "Y"
 
             # first translation is in the y direction
-            if _location[1] != 0:
-                # Consider only positive direction
-                _center_to_bite_edge = (abs(_alignment) * (self.pcb_info['size_x'] / 2)) + self.mousebite_diameter
-                # Convert to actual direction of the mousebite
-                _center_to_bite_edge *= self._get_sign(_alignment)
-                self.logger.debug("Center to bite edge X: {}".format(_center_to_bite_edge))
+            elif _location[1] != 0:
+                _size_key = "size_x"
+                _alignment_index = 0
+                _direction = "X"
 
-                if abs(_center_to_bite_edge) > (self.pcb_info['size_x'] / 2):
-                    # Mousebite will end up off the edge of the PCB to move it in by the diameter of the bite
-                    _mousebite_adjustment[0] = (self.pcb_info['size_x'] / 2) - self.mousebite_diameter
-                    # Change the sign so the direction is correct
-                    _mousebite_adjustment[0] *= self._get_sign(_alignment)
-                else:
-                    # Get whether the alignment is positive or negative
-                    _mousebite_adjustment[0] = self._get_sign(_alignment) * _center_to_bite_edge
+            ## Work out where to place the mousebite depending on whether the we need to shift in the X or Y direction
+            # Consider only positive direction
+            _center_to_bite_edge = (abs(_alignment) * (self.pcb_info[_size_key] / 2)) + self.mousebite_diameter
+            # Convert to actual direction of the mousebite
+            _center_to_bite_edge *= self._get_sign(_alignment)
+            self.logger.debug("Center to bite edge {}: {}".format(_direction, round(_center_to_bite_edge, 6)))
 
-                self.logger.debug("Mousebite X adjustment: {}".format(_mousebite_adjustment[0]))
-                _unified_location[0] += _alignment
+            if abs(_center_to_bite_edge) > (self.pcb_info[_size_key] / 2):
+                # Mousebite will end up off the edge of the PCB to move it in by the diameter of the bite
+                # Add a little bit to the diameter so we end up out the way of any small corner radii
+                _mousebite_adjustment[_alignment_index] = (self.pcb_info[_size_key] / 2) - (self.mousebite_diameter + _extra_adjustment_for_bite)
 
-            self.logger.debug("Unified location vector: {}".format(_location))
+            else:
+                # Mousebite will end up inside the pcb, so take off half the diameter from the dimension
+                _mousebite_adjustment[_alignment_index] = abs(_center_to_bite_edge) - (self.mousebite_diameter / 2) - _extra_adjustment_for_bite
 
-            # convert the unit vector location to a location on the PCB bounding box
+            # Change the sign so the direction is correct
+            _mousebite_adjustment[_alignment_index] *= self._get_sign(_alignment)
+            self.logger.debug("Mousebite {} adjustment: {}".format(_direction, round(_mousebite_adjustment[_alignment_index], 6)))
+
+            ## Combine the calculated mousebite adjustment with the unit vector to produce a location on the PCB bounds
+            # Convert the unit vector location to a location on the PCB bounding box
             _x_vector = (_location[0] * _mousebite_x_distance) + _mousebite_adjustment[0]
             _y_vector = (_location[1] * _mousebite_y_distance) + _mousebite_adjustment[1]
-            self.logger.debug("Mousebite location on pcb: ({}, {})".format(_x_vector, _y_vector))
+            self.logger.debug("Mousebite location on pcb: ({}, {})".format(round(_x_vector, 6), round(_y_vector, 6)))
 
             # Find the offset from the origin of the PCB to the center of the PCB
             _x_origin_to_center = (self.pcb_info['size_x'] / 2) - self.pcb_info['origin_x']
             _y_origin_to_center = (self.pcb_info['size_y'] / 2) - self.pcb_info['origin_y']
 
+            # Round primitive components
+            _primitive_x = round(_x_vector + _x_origin_to_center, 6)
+            _primitive_y = round(_y_vector + _y_origin_to_center, 6)
             # Append vector tuple to array
-            _primative_array.append((_x_vector + _x_origin_to_center, _y_vector + _y_origin_to_center))
+            _primative_array.append((_primitive_x, _primitive_y))
 
         self.logger.debug("Primative array: {}".format(_primative_array))
         return _primative_array
@@ -266,12 +274,26 @@ class Panel:
             _x_repeat = self._try_int(input("X Repeat: "))
             _y_repeat = self._try_int(input("Y Repeat: "))
 
-            # TODO make these number come from the config file
-            self.panel_info["width"] = round(10 + ((self.pcb_info['size_x'] + self.route_diameter) * float(_x_repeat)) + 8, 6)
-            self.panel_info["height"] = round(10 + ((self.pcb_info['size_y'] + self.route_diameter) * float(_y_repeat)) + 8, 6)
+            self.panel_info["width"] = round(self.panel_frame_width + self.route_diameter +
+                                             ((self.pcb_info['size_x'] + self.route_diameter) * float(_x_repeat)) +
+                                             self.panel_frame_width,
+                                             6)
+
+            self.panel_info["height"] = round(self.panel_frame_width + self.route_diameter +
+                                              ((self.pcb_info['size_y'] + self.route_diameter) * float(_y_repeat)) +
+                                              self.panel_frame_width,
+                                              6)
 
             self.logger.info("Total number of PCBs in panel: {}".format(_x_repeat * _y_repeat))
             self.logger.info("Panel Size: {}mm x {}mm".format(self.panel_info["width"], self.panel_info["height"]))
+
+            # Display a warning to the user if the dimensions will be outside the max dims in any orientation
+            if not (self.panel_info["width"] <= self.max_panel_dimensions[0] and self.panel_info["height"] <= self.max_panel_dimensions[1]) and not \
+                    (self.panel_info["width"] <= self.max_panel_dimensions[1] and self.panel_info["height"] <= self.max_panel_dimensions[0]):
+
+                self.logger.warning("Panel size is larger than max defined in config")
+                self.logger.warning("Max panel dimensions: {}mm x {}mm".format(self.max_panel_dimensions[0],
+                                                                               self.max_panel_dimensions[1]))
 
             _size_ok = input("Panel size acceptable? (Y/N): ") or "Y"
             if _size_ok.upper() == "Y":
@@ -363,20 +385,39 @@ class Panel:
         self.logger.info("Mousebite locations are not case sensitive, and are placed naively")
 
         self.logger.info("")
-        self.logger.info("Locations:")
-        for key, value in self.mousebite_locations.items():
-            self.logger.info("{}: {}".format(key.upper(), value["name"].title()))
+        # self.logger.info("Locations:")
+        # for key, value in self.mousebite_locations.items():
+        #     self.logger.info("{}: {}".format(key.upper(), value["name"].title()))
+        #
+        # self.logger.info("")
+        # self.logger.info("Alignments:")
+        # for key, value in self.mousebite_alignments.items():
+        #     self.logger.info("{}: {}".format(key.upper(), value["name"].title()))
 
-        self.logger.info("")
-        self.logger.info("Alignments:")
-        for key, value in self.mousebite_alignments.items():
-            self.logger.info("{}: {}".format(key.upper(), value["name"].title()))
+        # Dsiplay mousebite locations table
+        self.logger.info("   tl  tx   tc  tv  tr   ")
+        self.logger.info("lr ┌────────┬────────┐ rr")
+        self.logger.info("   │                 │   ")
+        self.logger.info("lv │                 │ rv")
+        self.logger.info("   │                 │   ")
+        self.logger.info("lc ├        ┼        ┤ rc")
+        self.logger.info("   │                 │   ")
+        self.logger.info("lx │                 │ rx")
+        self.logger.info("   │                 │   ")
+        self.logger.info("ll └────────┴────────┘ rl")
+        self.logger.info("   bl  bx   bc  bv  br   ")
 
         self.logger.info("")
         self.logger.info("Mousebite locations list:")
-        _mousebite_list = input("Locations: ")
-        _mousebite_list = _mousebite_list.replace(' ', '').split(',')
-        # _mousebite_list = ['bl']
+
+        while 1:
+            _mousebite_list = input("Locations: ")
+            # _mousebite_list = ['bl']
+            if len(_mousebite_list) > 0:
+                _mousebite_list = _mousebite_list.replace(' ', '').split(',')
+                break
+            else:
+                self.logger.warning("You must specify at least one mousebite")
 
         self.logger.debug("Locations list: {}".format(_mousebite_list))
 
@@ -395,9 +436,9 @@ class Panel:
                 # board x, y need to take into account the gerber 'origin'
                 # also make a list of all the x, y locations that the mousebites should be
                 # mousebite x, y are located from the center of the mousebite
-                self.pbc_coords.append((_x_loc, _y_loc))
+                self.pbc_coords.append((round(_x_loc, 6), round(_y_loc, 6)))
                 for bite in _mousebite_primitives:
-                    self.mousebite_coords.append((_x_loc + bite[0], _y_loc + bite[1]))
+                    self.mousebite_coords.append((round(_x_loc + bite[0], 6), round(_y_loc + bite[1], 6)))
 
                 _x_loc += self.pcb_info['size_x'] + self.route_diameter
 
@@ -466,8 +507,8 @@ class Panel:
         # Fill the outside of the board
         ET.SubElement(root, "ConstructNegativePolygon").text = "true"
         # There is an issue with odd sized boards where GP will think breaktabs are invalid sometimes
-        ET.SubElement(root, "FillOffset").text = str(self.route_diameter + 0.01)
-        ET.SubElement(root, "Smoothing").text = str(1)
+        ET.SubElement(root, "FillOffset").text = str(self.route_diameter)
+        ET.SubElement(root, "Smoothing").text = str(0.5)
         ET.SubElement(root, "ExtraTabDrillDistance").text = str(0)
         # This can sometimes cause issues if the silk layer is over the edge of the board
         ET.SubElement(root, "ClipToOutlines").text = "true"
@@ -486,7 +527,9 @@ class Panel:
         with open(_out_path, 'wb') as out:
             out.write(out_string)
 
-        self.logger.info("Gerberset written successfully!")
+        self.logger.info("")
+        self.logger.info("============== Success ==============")
+        self.logger.info("== Gerberset written successfully! ==")
         self.logger.info("File is located at: {}".format(str(_out_path)))
 
     def _write_report(self):
@@ -499,18 +542,23 @@ class Panel:
         _out_path = self.gerber_file_path.parent / (self.gerber_file_path.stem + "-report.txt")
         with open(_out_path, 'w') as out:
             out.write("=" * 40 + "\n")
+            out.write("GerberPanelizer Paneliser - V{}\n".format(self._version))
             out.write("Panel file generation report\n")
-            out.write("File generated on: {}\n".format(datetime.datetime.now().strftime("%H:%M %b/%d/%Y")))
+            out.write("File generated on: {} at {}\n".format(
+                datetime.datetime.now().strftime("%b/%d/%Y"),
+                datetime.datetime.now().strftime("%H:%M")
+            ))
             out.write("Gerberset path: {}\n".format(str(self.gerber_file_path.parent / (self.gerber_file_path.stem + "-panel.gerberset"))))
             out.write("=" * 40 + "\n")
             out.write("\n")
 
             out.write("Total number of PCBs on panel: {}\n".format(self.panel_info["repeat_x"] * self.panel_info["repeat_y"]))
-            out.write("Repeat X*Y: {} x {}\n".format(self.panel_info["repeat_x"], self.panel_info["repeat_y"]))
-            out.write("Step X*Y: {}mm x {}mm\n".format(self.panel_info["step_x"], self.panel_info["step_y"]))
+            out.write("Repeat (X*Y): {} x {}\n".format(self.panel_info["repeat_x"], self.panel_info["repeat_y"]))
+            out.write("Step (X*Y): {}mm x {}mm\n".format(round(self.panel_info["step_x"], 6), round(self.panel_info["step_y"], 6)))
             out.write("\n")
 
-            out.write("PCB size: {}mm x {}mm\n".format(self.pcb_info["size_x"], self.pcb_info["size_y"]))
+            out.write("Panel size (W*H): {}mm x {}mm\n".format(round(self.panel_info["width"], 6), round(self.panel_info["height"], 6)))
+            out.write("PCB size (X*Y): {}mm x {}mm\n".format(round(self.pcb_info["size_x"], 6), round(self.pcb_info["size_y"], 6)))
 
     def _clean_tempfiles(self):
         """
@@ -551,9 +599,10 @@ class Panel:
             return 1
 
     def _exit_error(self, message=None):
-        self.logger.error("Error Occurred, Quitting")
         if message:
             self.logger.error(message)
+
+        self.logger.error("Error Occurred, Quitting")
 
         self._clean_tempfiles()
         exit(-1)

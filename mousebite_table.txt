@@ -1,0 +1,14 @@
+This is the table that is shown to the user to indicate which location code related to where on the PCB
+Table characters are found from https://en.wikipedia.org/wiki/Box-drawing_character
+
+   tl  tx   tc  tv  tr
+lr ┌────────┬────────┐ rl
+   │                 │
+lv │                 │ rx
+   │                 │
+lc ├        ┼        ┤ rc
+   │                 │
+lx │                 │ rv
+   │                 │
+ll └────────┴────────┘ rr
+   bl  bx   bc  bv  br
