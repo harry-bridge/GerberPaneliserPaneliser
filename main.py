@@ -28,9 +28,9 @@ class Panel:
     logger = None
     gerber_file_path = None
 
-    # {size_x, size_y, origin_x, origin_y}
+    # {size_x, size_y, surface_area, origin_x, origin_y}
     pcb_info = dict()
-    # {width, height, repeat_x, repeat_y, step_x, step_y}
+    # {width, height, surface_area, repeat_x, repeat_y, step_x, step_y}
     panel_info = dict()
 
     # list of tuples of x, y locations for each pcb instance
@@ -56,10 +56,16 @@ class Panel:
     mousebite_diameter = None
     # Max dimensions before a warning is generated
     max_panel_dimensions = None
+    # Manufacturers maximum buildable dimensions
+    _manf_max_panel_dimensions = None
     panel_frame_width = None
     profile_file_extensions = None
+
+    max_panel_surface_area = None
     # If the gerber file contains any of these then ignore it
     ignored_file_starts = ['._', '.DS_Store']
+
+    gerber_gen = None
 
     def __init__(self):
         self.logger = logzero.logger
@@ -74,8 +80,6 @@ class Panel:
         Parse the config file and make available to the rest of the program
         :return:
         """
-        print(self.config_file_path)
-
         if not self.config_file_path.exists():
             return self._exit_error("Config file not found, please make sure it is located at: {}".format(self.config_file_path))
 
@@ -94,6 +98,11 @@ class Panel:
         _max_dims = _panel_options["max_panel_dimensions"].replace(' ', '').split(',')
         self.max_panel_dimensions = [float(x) for x in _max_dims]
 
+        _fab_options = self.config["Fabrication"]
+        self.max_panel_surface_area = float(_fab_options["max_panel_surface_area"])
+        _max_dims = _fab_options["max_panel_dimensions"].replace(' ', '').split(',')
+        self._manf_max_panel_dimensions = [float(x) for x in _max_dims]
+
     def _load_file(self):
         """
         Loads a single file to be turned into an array
@@ -105,7 +114,7 @@ class Panel:
         # self.gerber_file_path = Path(self._temp_path)
         _found_profile_file = None
 
-        self.logger.debug("Loading file: {}".format(self.gerber_file_path))
+        self.logger.info("Loading file: {}".format(self.gerber_file_path))
 
         if self.gerber_file_path.suffix == ".zip":
             with ZipFile(self.gerber_file_path, 'r') as zip_file:
@@ -144,6 +153,9 @@ class Panel:
 
             self.pcb_info["size_x"] = round(pcb_bounds[0][1] - pcb_bounds[0][0], 6)
             self.pcb_info["size_y"] = round(pcb_bounds[1][1] - pcb_bounds[1][0], 6)
+            # Work out surface area in dm2
+            _surface_area = (self.pcb_info["size_x"] * self.pcb_info["size_y"]) / 10000
+            self.pcb_info["surface_area"] = round(_surface_area, 6)
 
             # origin is how far away the bottom left corner of the pcb is to the 'origin' of the board
             # need to flip the sign to get the coord of the origin wrt the bl corner
@@ -268,7 +280,9 @@ class Panel:
         self.logger.info("== Input information for array ==")
         self.logger.info("PCB Size: {}mm x {}mm".format(self.pcb_info['size_x'], self.pcb_info['size_y']))
 
+        # Get the user to enter the desired step in the X and Y direction for the panel
         while 1:
+            _warning_index = 0
             self.logger.info("= Repeat =")
             self.logger.info("How many boards to arrange in the X and Y directions")
             _x_repeat = self._try_int(input("X Repeat: "))
@@ -284,16 +298,37 @@ class Panel:
                                               self.panel_frame_width,
                                               6)
 
+            _surface_area = (self.panel_info["width"] * self.panel_info["height"]) / 10000
+            self.panel_info["surface_area"] = round(_surface_area, 6)
+
             self.logger.info("Total number of PCBs in panel: {}".format(_x_repeat * _y_repeat))
+            self.logger.info("Panel surface area: {}dm2".format(self.panel_info["surface_area"]))
             self.logger.info("Panel Size: {}mm x {}mm".format(self.panel_info["width"], self.panel_info["height"]))
 
             # Display a warning to the user if the dimensions will be outside the max dims in any orientation
             if not (self.panel_info["width"] <= self.max_panel_dimensions[0] and self.panel_info["height"] <= self.max_panel_dimensions[1]) and not \
                     (self.panel_info["width"] <= self.max_panel_dimensions[1] and self.panel_info["height"] <= self.max_panel_dimensions[0]):
 
-                self.logger.warning("Panel size is larger than max defined in config")
+                _warning_index += 1
+                self.logger.warning("[#{}] Panel size is larger than max defined in config".format(_warning_index))
                 self.logger.warning("Max panel dimensions: {}mm x {}mm".format(self.max_panel_dimensions[0],
                                                                                self.max_panel_dimensions[1]))
+
+            if (self.panel_info["surface_area"] > self.max_panel_surface_area) and \
+                    bool(self.config["Fabrication"]["show_surface_area_warning"]):
+
+                _warning_index += 1
+                self.logger.warning("[#{}] Panel surface area is larger than max defined in config".format(_warning_index))
+                self.logger.warning("Max panel surface area: {}dm2".format(self.max_panel_surface_area))
+
+            # Display a warning to the user if the dimensions will be outside the max dims for the manufacturer in any orientation
+            if not (self.panel_info["width"] <= self._manf_max_panel_dimensions[0] and self.panel_info["height"] <= self._manf_max_panel_dimensions[1]) and not \
+                    (self.panel_info["width"] <= self._manf_max_panel_dimensions[1] and self.panel_info["height"] <= self._manf_max_panel_dimensions[0]):
+
+                _warning_index += 1
+                self.logger.warning("[#{}] Panel size is larger than manufacturer max".format(_warning_index))
+                self.logger.warning("Max manufacturer dimensions: {}mm x {}mm".format(self._manf_max_panel_dimensions[0],
+                                                                                      self._manf_max_panel_dimensions[1]))
 
             _size_ok = input("Panel size acceptable? (Y/N): ") or "Y"
             if _size_ok.upper() == "Y":
@@ -550,7 +585,9 @@ class Panel:
             out.write("\n")
 
             out.write("Panel size (W*H): {}mm x {}mm\n".format(round(self.panel_info["width"], 6), round(self.panel_info["height"], 6)))
+            out.write("Panel surface area: {}dm2\n".format(self.panel_info["surface_area"]))
             out.write("PCB size (X*Y): {}mm x {}mm\n".format(round(self.pcb_info["size_x"], 6), round(self.pcb_info["size_y"], 6)))
+            out.write("PCB surface area: {}dm2\n".format(self.pcb_info["surface_area"]))
 
     def _clean_tempfiles(self):
         """
