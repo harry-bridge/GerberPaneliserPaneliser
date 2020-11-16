@@ -6,11 +6,13 @@ import logzero
 import logging
 import math
 import datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from zipfile import ZipFile
 import xml.etree.ElementTree as ET
 import xml.dom.minidom as minidom
 from configparser import ConfigParser
+
+from gerber_gen import GerberGenerator
 
 
 class Panel:
@@ -26,11 +28,14 @@ class Panel:
     config = ConfigParser()
 
     logger = None
+    # Path where the user inputted gerber file is
     gerber_file_path = None
+    # Top level output directory
+    out_path = None
 
     # {size_x, size_y, surface_area, origin_x, origin_y}
     pcb_info = dict()
-    # {width, height, surface_area, repeat_x, repeat_y, step_x, step_y}
+    # {width, height, surface_area, repeat_x, repeat_y, step_x, step_y, title}
     panel_info = dict()
 
     # list of tuples of x, y locations for each pcb instance
@@ -65,7 +70,11 @@ class Panel:
     # If the gerber file contains any of these then ignore it
     ignored_file_starts = ['._', '.DS_Store']
 
+    # GerberGenerator class object
     gerber_gen = None
+    # panel_frame_gerber_dir = None
+    # {fid_locations, drill_locations, fid_to_board_0_locations}
+    panel_frame_info = dict()
 
     def __init__(self):
         self.logger = logzero.logger
@@ -74,6 +83,9 @@ class Panel:
         # make sure the temp directory is valid, if not, create it
         if not self.temp_path.exists() or not self.temp_path.is_dir():
             Path.mkdir(self.temp_path)
+
+        # Init the gerber generator
+        self.gerber_gen = GerberGenerator(self.logger)
 
     def _read_config(self):
         """
@@ -102,6 +114,26 @@ class Panel:
         self.max_panel_surface_area = float(_fab_options["max_panel_surface_area"])
         _max_dims = _fab_options["max_panel_dimensions"].replace(' ', '').split(',')
         self._manf_max_panel_dimensions = [float(x) for x in _max_dims]
+
+    def _make_output_dir(self):
+        """
+        Makes various output directories for generated files
+        output structure is the directory where the gerber zip is
+           |-- panel
+              report.txt
+              panel.gerberset
+              panel_frame_overlay.zip
+              |-- panellised_gerbers
+                 various gerber files
+        :return:
+        """
+        self.out_path = self.gerber_file_path.parent / "panel"
+        if not self.out_path.exists():
+            self.out_path.mkdir()
+
+        _panel_path = self.out_path / "panellised_gerbers"
+        if not _panel_path.exists():
+            _panel_path.mkdir()
 
     def _load_file(self):
         """
@@ -280,13 +312,27 @@ class Panel:
         self.logger.info("== Input information for array ==")
         self.logger.info("PCB Size: {}mm x {}mm".format(self.pcb_info['size_x'], self.pcb_info['size_y']))
 
+        self.logger.info("= Title =")
+        self.logger.info("Input title for panel frame")
+        self.logger.info("Default: {}".format(self.gerber_file_path.stem))
+
+        self.panel_info["title"] = input("Title: ").strip() or self.gerber_file_path.stem
+        self.logger.debug("Title for frame: {}".format(self.panel_info["title"]))
+
         # Get the user to enter the desired step in the X and Y direction for the panel
         while 1:
             _warning_index = 0
             self.logger.info("= Repeat =")
             self.logger.info("How many boards to arrange in the X and Y directions")
             _x_repeat = self._try_int(input("X Repeat: "))
+            if _x_repeat < 1:
+                self.logger.error("X repeat must be greater or equal to 1")
+                continue
+
             _y_repeat = self._try_int(input("Y Repeat: "))
+            if _y_repeat < 1:
+                self.logger.error("Y repeat must be greater or equal to 1")
+                continue
 
             self.panel_info["width"] = round(self.panel_frame_width + self.route_diameter +
                                              ((self.pcb_info['size_x'] + self.route_diameter) * float(_x_repeat)) +
@@ -330,7 +376,7 @@ class Panel:
                 self.logger.warning("Max manufacturer dimensions: {}mm x {}mm".format(self._manf_max_panel_dimensions[0],
                                                                                       self._manf_max_panel_dimensions[1]))
 
-            _size_ok = input("Panel size acceptable? (Y/N): ") or "Y"
+            _size_ok = input("Panel size acceptable? (*Y/N): ") or "Y"
             if _size_ok.upper() == "Y":
                 break
 
@@ -348,7 +394,7 @@ class Panel:
             self.logger.info("= Inter-board support bars =")
             self.logger.info("These are extra bits of panel in the X and/or Y direction that add support for odd shaped boards")
 
-            _add_bars = input("Add inter-board support bars? (Y/N): ") or "Y"
+            _add_bars = input("Add inter-board support bars? (Y/*N): ") or "N"
             if _add_bars.upper() == "N":
                 break
 
@@ -487,6 +533,40 @@ class Panel:
         self.mousebite_coords = set(_mousebite_coords)
         self.logger.debug("Mousebite Coords: {}".format(self.mousebite_coords))
 
+    def _make_frame_gerbers(self):
+        """
+        Make frame output gerbers to overlay on the panel frame
+        :return:
+        """
+        self.logger.info("== Making panel frame overlay gerbers ==")
+        _panel_dims = (self.panel_info["width"], self.panel_info["height"])
+        _panel_step = (self.panel_info["step_x"], self.panel_info["step_y"])
+        _panel_repeat = (self.panel_info["repeat_x"], self.panel_info["repeat_y"])
+        _frame_title = self.panel_info["title"]
+        _output_dir = self.out_path
+
+        _data = self.gerber_gen.make_frame_gerbers(_panel_dims, _panel_step, _panel_repeat, _frame_title, _output_dir, self.config)
+
+        # Returned data is a dict containing fid locations, drill locations and the location of the output zip
+        self.panel_frame_gerber_dir = _data["gerber_location"]
+        self.panel_frame_info["fiducial_locations"] = _data["fiducial_locations"]
+        self.panel_frame_info["drill_locations"] = _data["drill_locations"]
+
+        _panel_to_board_offset = self.panel_frame_width + self.route_diameter
+        _fids_to_board_0 = list()
+        for _loc in self.panel_frame_info["fiducial_locations"]:
+            # Fiducial locations are a tuple of (x, y) locations
+            # Calculate the location from each of the fiducials to the origin of the first board
+            _fids_to_board_0.append(
+                (
+                    round(_loc[0] + (self.pcb_info["origin_x"] + _panel_to_board_offset), 4),
+                    round(_loc[1] + (self.pcb_info["origin_y"] + _panel_to_board_offset), 4)
+                )
+            )
+
+        self.panel_frame_info["fid_to_board_0_locations"] = _fids_to_board_0
+        self.logger.debug("Fids to first board: {}".format(_fids_to_board_0))
+
     def _write_xml(self):
         """
         Writes the .gerberset file for processing with panelizer
@@ -496,22 +576,29 @@ class Panel:
         root = ET.Element("GerberLayoutSet", {"xmlns:xsd": "http://www.w3.org/2001/XMLSchema", "xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance"})
         loaded_outlines = ET.SubElement(root, "LoadedOutlines")
 
+        _loaded_outlines = {
+            str(self.panel_frame_gerber_dir): [(0, 0)],
+            str(self.gerber_file_path): self.pbc_coords
+        }
+
         # Tell GP where the gerber zip file is
-        ET.SubElement(loaded_outlines, "string").text = str(self.gerber_file_path)
+        ET.SubElement(loaded_outlines, "string").text = str(PureWindowsPath(self.gerber_file_path))
+        ET.SubElement(loaded_outlines, "string").text = str(PureWindowsPath(self.panel_frame_gerber_dir))
         instances = ET.SubElement(root, "Instances")
 
-        for _loc in self.pbc_coords:
-            gerber_instance = ET.SubElement(instances, "GerberInstance")
-            center = ET.SubElement(gerber_instance, "Center")
-            # X and Y location of each thing
-            ET.SubElement(center, "X").text = str(round(_loc[0], self.decimal_precision))
-            ET.SubElement(center, "Y").text = str(round(_loc[1], self.decimal_precision))
-            # Gerber rotation angle = 0
-            ET.SubElement(gerber_instance, "Angle").text = str(0)
-            # Tell GP which gerber file this is for
-            ET.SubElement(gerber_instance, "GerberPath").text = str(self.gerber_file_path)
-            # File hasn't been generated
-            ET.SubElement(gerber_instance, "Generated").text = "false"
+        for _gerber_path, _gerber_coords in _loaded_outlines.items():
+            for _loc in _gerber_coords:
+                gerber_instance = ET.SubElement(instances, "GerberInstance")
+                center = ET.SubElement(gerber_instance, "Center")
+                # X and Y location of each thing
+                ET.SubElement(center, "X").text = str(round(_loc[0], self.decimal_precision))
+                ET.SubElement(center, "Y").text = str(round(_loc[1], self.decimal_precision))
+                # Gerber rotation angle = 0
+                ET.SubElement(gerber_instance, "Angle").text = str(0)
+                # Tell GP which gerber file this is for
+                ET.SubElement(gerber_instance, "GerberPath").text = str(PureWindowsPath(_gerber_path))
+                # File hasn't been generated
+                ET.SubElement(gerber_instance, "Generated").text = "false"
 
         tabs = ET.SubElement(root, "Tabs")
 
@@ -541,16 +628,18 @@ class Panel:
         ET.SubElement(root, "ClipToOutlines").text = "true"
 
         # make last export folder
-        _export_dir = self.gerber_file_path.parent / self.config['PanelOptions']['default_export_folder_name']
-        if not _export_dir.exists() or not _export_dir.is_dir():
-            _export_dir.mkdir()
+        # _export_dir = self.gerber_file_path.parent / self.config['PanelOptions']['default_export_folder_name']
+        # if not _export_dir.exists() or not _export_dir.is_dir():
+        #     _export_dir.mkdir()
 
-        ET.SubElement(root, "LastExportFolder").text = str(_export_dir)
+        # Last export folder, already taken care on in _make_output_dir() function
+        _panel_path = self.out_path / "panellised_gerbers"
+        ET.SubElement(root, "LastExportFolder").text = str(PureWindowsPath(_panel_path))
         ET.SubElement(root, "DoNotGenerateMouseBites").text = "false"
 
         out_string = minidom.parseString(ET.tostring(root)).toprettyxml(indent="  ", newl="\n", encoding='utf-8')
 
-        _out_path = self.gerber_file_path.parent / (self.gerber_file_path.stem + "-panel.gerberset")
+        _out_path = self.out_path / (self.gerber_file_path.stem + "-panel.gerberset")
         with open(_out_path, 'wb') as out:
             out.write(out_string)
 
@@ -566,13 +655,13 @@ class Panel:
         """
         self.logger.info("== Writing panel generation report ==")
 
-        _out_path = self.gerber_file_path.parent / (self.gerber_file_path.stem + "-report.txt")
+        _out_path = self.out_path / (self.gerber_file_path.stem + "-report.txt")
         with open(_out_path, 'w') as out:
             out.write("=" * 40 + "\n")
             out.write("GerberPanelizer Paneliser - V{}\n".format(self._version))
-            out.write("Panel file generation report\n")
+            out.write("Panel file generation report for: {}\n".format(self.panel_info["title"]))
             out.write("File generated on: {} at {}\n".format(
-                datetime.datetime.now().strftime("%b/%d/%Y"),
+                datetime.datetime.now().strftime("%d/%b/%Y"),
                 datetime.datetime.now().strftime("%H:%M")
             ))
             out.write("Gerberset path: {}\n".format(str(self.gerber_file_path.parent / (self.gerber_file_path.stem + "-panel.gerberset"))))
@@ -581,13 +670,25 @@ class Panel:
 
             out.write("Total number of PCBs on panel: {}\n".format(self.panel_info["repeat_x"] * self.panel_info["repeat_y"]))
             out.write("Repeat (X*Y): {} x {}\n".format(self.panel_info["repeat_x"], self.panel_info["repeat_y"]))
-            out.write("Step (X*Y): {}mm x {}mm\n".format(round(self.panel_info["step_x"], 6), round(self.panel_info["step_y"], 6)))
+            out.write("Step (X*Y): {}mm x {}mm\n".format(round(self.panel_info["step_x"], 4), round(self.panel_info["step_y"], 4)))
             out.write("\n")
 
-            out.write("Panel size (W*H): {}mm x {}mm\n".format(round(self.panel_info["width"], 6), round(self.panel_info["height"], 6)))
-            out.write("Panel surface area: {}dm2\n".format(self.panel_info["surface_area"]))
-            out.write("PCB size (X*Y): {}mm x {}mm\n".format(round(self.pcb_info["size_x"], 6), round(self.pcb_info["size_y"], 6)))
-            out.write("PCB surface area: {}dm2\n".format(self.pcb_info["surface_area"]))
+            out.write("Panel size (W*H): {}mm x {}mm\n".format(round(self.panel_info["width"], 4), round(self.panel_info["height"], 4)))
+            out.write("Panel surface area: {}dm2\n".format(round(self.panel_info["surface_area"], 4)))
+            out.write("PCB size (X*Y): {}mm x {}mm\n".format(round(self.pcb_info["size_x"], 4), round(self.pcb_info["size_y"], 4)))
+            out.write("PCB surface area: {}dm2\n".format(round(self.pcb_info["surface_area"], 4)))
+            out.write("\n")
+
+            out.write("== Panel Fiducials ==\n")
+            out.write("Fiducial locations (X, Y):\n")
+            _fids_order = ["BL", "BR", "TL", "TR"]
+            for index, _loc in enumerate(self.panel_frame_info["fiducial_locations"]):
+                out.write("  {} - {}\n".format(_fids_order[index], _loc))
+            out.write("\n")
+
+            out.write("Fiducials to board 0 (X, Y)\n")
+            for index, _loc in enumerate(self.panel_frame_info["fid_to_board_0_locations"]):
+                out.write("  {} - {}\n".format(_fids_order[index], _loc))
 
     def _clean_tempfiles(self):
         """
@@ -641,7 +742,9 @@ class Panel:
 
         self._read_config()
         self._load_file()
+        self._make_output_dir()
         self._make_array()
+        self._make_frame_gerbers()
         self._clean_tempfiles()
         self._write_report()
         self._write_xml()
