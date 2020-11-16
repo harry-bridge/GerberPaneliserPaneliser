@@ -1,5 +1,7 @@
 ## GerberPaneliserPaneliser
 [![Python 3.6](https://img.shields.io/badge/python-3.6-blue.svg)](https://www.python.org/downloads/release/python-360/)
+[![](https://img.shields.io/github/license/harry-bridge/GerberPaneliserPaneliser)](https://github.com/harry-bridge/GerberPaneliserPaneliser/blob/master/LICENSE.md)
+
 
 A simple file pre-processor (paneliser) to generate `.gerberset` file for use with 
 [GerberPanelizer](https://github.com/ThisIsNotRocketScience/GerberTools).
