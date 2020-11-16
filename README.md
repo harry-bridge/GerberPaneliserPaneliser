@@ -16,7 +16,7 @@ files into.
 There is a `config.ini` file that holds some settings that can be changed
 the defualts will be applicable to most board houses though.
 
-## Running
+### Running
 This script is written in python 3, it uses mostly builtin modules but there are some extras that need installing
 
 First install requirements with `pip install -r requirements.txt`
