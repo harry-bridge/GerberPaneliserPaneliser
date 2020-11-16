@@ -128,7 +128,7 @@ class GerberGenerator:
         Write gerber files, fiducial locations and drills
         :return:
         """
-        self.logger.debug("== Generating frame gerbers ==")
+        self.logger.info("== Generating frame gerbers ==")
 
         _y_offset = (float(self.config["PanelOptions"]["panel_width"]) / 2)
         # Absolute coords for fiducial marks
@@ -353,6 +353,7 @@ class GerberGenerator:
         _data["gerber_location"] = self._zip_output_dir()
 
         self._clean_output_dir()
+        self.logger.info("= Finished writing frame gerbers =")
 
         return _data
 

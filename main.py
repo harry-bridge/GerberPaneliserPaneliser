@@ -78,7 +78,8 @@ class Panel:
 
     def __init__(self):
         self.logger = logzero.logger
-        logzero.loglevel(logging.DEBUG)
+        # logzero.loglevel(logging.DEBUG)
+        logzero.loglevel(logging.INFO)
 
         # make sure the temp directory is valid, if not, create it
         if not self.temp_path.exists() or not self.temp_path.is_dir():
@@ -348,7 +349,7 @@ class Panel:
             self.panel_info["surface_area"] = round(_surface_area, 6)
 
             self.logger.info("Total number of PCBs in panel: {}".format(_x_repeat * _y_repeat))
-            self.logger.info("Panel surface area: {}dm2".format(self.panel_info["surface_area"]))
+            self.logger.info("Panel surface area: {}dm2".format(round(self.panel_info["surface_area"], 4)))
             self.logger.info("Panel Size: {}mm x {}mm".format(self.panel_info["width"], self.panel_info["height"]))
 
             # Display a warning to the user if the dimensions will be outside the max dims in any orientation
