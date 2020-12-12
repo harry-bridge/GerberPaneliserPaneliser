@@ -111,15 +111,15 @@ class GerberGenerator:
 
     def _text_to_silk_mm(self, text):
         """
-        Returns the actual length of a string of text in mm when applied to the silkscreen layer of the PCB
+        Returns the approximate length of a string of text in mm when applied to the silkscreen layer of the PCB
         :param text: A string of text to get the mm length of
         :return: The length of the string in mm when on the PCB
         """
-        _kerning = self.font_definition["text_spacing"]
+        _char_width = self.font_definition["char_width"]
         # Remove all the spaces from the string to find the length relating to the letters
-        _string_len = len(text.replace(' ', '')) * _kerning
+        _string_len = len(text.replace(' ', '')) * _char_width
         # Use upper char space as this is the worst case scenario
-        _string_len += (len(text.split(' ')) - 1) * self.font_definition["space_upper"]
+        _string_len += (len(text.split(' ')) - 1) * self.font_definition["char_width"]
 
         return _string_len
 
@@ -207,8 +207,6 @@ class GerberGenerator:
             out_file.write("\n")
             out_file.write("D10*\n")
 
-            kerning = self.font_definition["text_spacing"]
-
             text_locations = {
                 "title": {"pos": [25.4, 5.3 - (self.text_size / 2)],
                           "string": self.panel_info["title"]
@@ -265,19 +263,20 @@ class GerberGenerator:
 
                     for index, letter in enumerate(_string):
                         if letter == " ":
-                            if _string[index-1].isupper():
-                                x_start += self.font_definition["space_upper"] - kerning
-                            else:
-                                x_start += self.font_definition["space_lower"] - kerning
+                            x_start += self.font_definition["space_char_width"] - self.font_definition["text_letter_gap"]
                         else:
                             try:
-                                for coords in self.font_definition["letters"][letter]:
+                                _xmax = 0
+                                for coords in self.font_definition["letters"][str(letter)]:
                                     # print(coords)
                                     _x = (coords["x"] + x_start) * 10000
+                                    if (coords["x"] + x_start) > _xmax:
+                                        # Store the maximum X coord when drawing the letter
+                                        _xmax = (coords["x"] + x_start)
                                     _y = (coords["y"] + y_start) * 10000
                                     out_file.write("X{}Y{}{}*\n".format(int(_x), int(_y), coords["command"]))
 
-                                x_start += kerning
+                                x_start = _xmax + self.font_definition["text_letter_gap"]
                             except KeyError:
                                 self.logger.error("Letter '{}' not found in font definition file".format(letter))
                                 self.logger.error("Please try again with a different frame title")
@@ -364,4 +363,4 @@ if __name__ == '__main__':
     config.read(_config_path)
     # Testing dimensions, in mm
     app = GerberGenerator()
-    app.make_frame_gerbers((100, 100), (5, 4), (25, 25), "Test 1234", Path.cwd(), config)
+    app.make_frame_gerbers((100, 100), (5, 4), (25, 25), "Test. 12 34.0", Path.cwd(), config)

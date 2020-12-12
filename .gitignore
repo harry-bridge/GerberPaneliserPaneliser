@@ -5,3 +5,8 @@ venv/
 test_data/
 *.xml
 temp/
+
+_paneliser_temp_gerbers
+*b#*
+*s#*
+vector_font_eagle/CAMOutputs
