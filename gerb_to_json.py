@@ -76,7 +76,7 @@ class GerbLoader:
         _write_to_file = 1
 
         try:
-            _char = self.font_def["letters"][self.letter_name]
+            _ = self.font_def["letters"][self.letter_name]
             self.logger.warning("Character '{}' already exists in font definition file".format(self.letter_name))
             _write_to_file = 0
 
