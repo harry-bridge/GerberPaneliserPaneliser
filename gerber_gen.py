@@ -123,6 +123,36 @@ class GerberGenerator:
 
         return _string_len
 
+    def _add_text_to_silk_file(self, text, file, x_start, y_start):
+        """
+        Adds a sting of text to the given silkscreen file
+        :param text:
+        :param file:
+        :return:
+        """
+
+        with open(file, 'a') as out_file:
+            for index, letter in enumerate(text):
+                if letter == " ":
+                    x_start += self.font_definition["space_char_width"] - self.font_definition["text_letter_gap"]
+                else:
+                    try:
+                        _xmax = 0
+                        for coords in self.font_definition["letters"][str(letter)]:
+                            # print(coords)
+                            _x = (coords["x"] + x_start) * 10000
+                            if (coords["x"] + x_start) > _xmax:
+                                # Store the maximum X coord when drawing the letter
+                                _xmax = (coords["x"] + x_start)
+                            _y = (coords["y"] + y_start) * 10000
+                            out_file.write("X{}Y{}{}*\n".format(int(_x), int(_y), coords["command"]))
+
+                        x_start = _xmax + self.font_definition["text_letter_gap"]
+                    except KeyError:
+                        self.logger.error("Letter '{}' not found in font definition file".format(letter))
+                        self.logger.error("Please try again with a different frame title")
+                        exit(1)
+
     def _write_gerbers(self):
         """
         Write gerber files, fiducial locations and drills
@@ -207,81 +237,91 @@ class GerberGenerator:
             out_file.write("\n")
             out_file.write("D10*\n")
 
-            text_locations = {
-                "title": {"pos": [25.4, 5.3 - (self.text_size / 2)],
-                          "string": self.panel_info["title"]
-                          },
-                "date": {"pos": [25.4, 2.6 - (self.text_size / 2)],
-                         "string": datetime.datetime.now().strftime("%d/%b/%Y")
-                         },
-                "repeat": {"pos": [0, 5.3 - (self.text_size / 2)],
-                           "string": "Repeat: {} x {}".format(self.panel_info["repeat"][0], self.panel_info["repeat"][1])
-                           },
-                "step": {"pos": [0, 2.6 - (self.text_size / 2)],
-                         "string": "Step: {}mm x {}mm".format(round(self.panel_info["step"][0], 4), round(self.panel_info["step"][1], 4))
-                         }
-            }
+        text_locations = {
+            "title": {"pos": [25.4, 5.3 - (self.text_size / 2)],
+                      "string": self.panel_info["title"]
+                      },
+            "date": {"pos": [25.4, 2.6 - (self.text_size / 2)],
+                     "string": datetime.datetime.now().strftime("%d/%b/%Y")
+                     },
+            "repeat": {"pos": [0, 5.3 - (self.text_size / 2)],
+                       "string": "Repeat: {} x {}".format(self.panel_info["repeat"][0], self.panel_info["repeat"][1])
+                       },
+            "step": {"pos": [0, 2.6 - (self.text_size / 2)],
+                     "string": "Step: {}mm x {}mm".format(round(self.panel_info["step"][0], 4), round(self.panel_info["step"][1], 4))
+                     }
+        }
 
-            # Title and Date are written first, get the length of those
-            _title_len = self._text_to_silk_mm(text_locations["title"]["string"])
-            _date_len = self._text_to_silk_mm(text_locations["date"]["string"])
-            _repeat_len = self._text_to_silk_mm(text_locations["repeat"]["string"])
-            _step_len = self._text_to_silk_mm(text_locations["step"]["string"])
+        # Title and Date are written first, get the length of those
+        _title_len = self._text_to_silk_mm(text_locations["title"]["string"])
+        _date_len = self._text_to_silk_mm(text_locations["date"]["string"])
+        _repeat_len = self._text_to_silk_mm(text_locations["repeat"]["string"])
+        _step_len = self._text_to_silk_mm(text_locations["step"]["string"])
 
-            # Add offset just calculated to the base location for the text
-            _text_x_offset = max(_title_len, _date_len) + 5
-            _base_x = text_locations["title"]["pos"][0]
-            text_locations["repeat"]["pos"][0] = _base_x + _text_x_offset
-            text_locations["step"]["pos"][0] = _base_x + _text_x_offset
+        # Add offset just calculated to the base location for the text
+        _text_x_offset = max(_title_len, _date_len) + 5
+        _base_x = text_locations["title"]["pos"][0]
+        text_locations["repeat"]["pos"][0] = _base_x + _text_x_offset
+        text_locations["step"]["pos"][0] = _base_x + _text_x_offset
 
-            # Find if the strings to be drawn are going to end up off the PCB
-            # Issue a warning to the user and ask for their input if this is the case
-            _max_text_x = max((_repeat_len + text_locations["repeat"]["pos"][0]), (_step_len + text_locations["step"]["pos"][0]))
-            self.logger.debug("Max silk X: {}".format(_max_text_x))
+        # Find if the strings to be drawn are going to end up off the PCB
+        # Issue a warning to the user and ask for their input if this is the case
+        _max_text_x = max((_repeat_len + text_locations["repeat"]["pos"][0]), (_step_len + text_locations["step"]["pos"][0]))
+        self.logger.debug("Max silk X: {}".format(_max_text_x))
 
-            _output_silk_layers = 1
-            if _max_text_x > (self.fid_coords[1][0] - (self.fid_soldermask_dia / 2)):
-                self.logger.warning("Silkscreen text on panel frame will extend beyond the edge of the panel")
-                self.logger.warning("Do you still want to output the silkscreen layer?")
-                self.logger.warning("The step and repeat information will still be output in the report file")
-                _output_silk_input = input("Ouput panel silkscreen: (*Y/N)") or "Y"
+        _output_silk_layers = 1
+        if _max_text_x > (self.fid_coords[1][0] - (self.fid_soldermask_dia / 2)):
+            self.logger.warning("Silkscreen text on panel frame will extend beyond the edge of the panel")
+            self.logger.warning("Do you still want to output the silkscreen layer?")
+            self.logger.warning("The step and repeat information will still be output in the report file")
+            _output_silk_input = input("Ouput panel silkscreen: (*Y/N)") or "Y"
 
-                if _output_silk_input == "N":
-                    _output_silk_layers = 0
-                    self.logger.info("Skipping silkscreen layer output")
-                elif _output_silk_input == "Y":
-                    pass
-                else:
-                    self.logger.warning("input '{}' not recognised, assuming 'Y'".format(_output_silk_layers))
+            if _output_silk_input == "N":
+                _output_silk_layers = 0
+                self.logger.info("Skipping silkscreen layer output")
+            elif _output_silk_input == "Y":
+                pass
+            else:
+                self.logger.warning("input '{}' not recognised, assuming 'Y'".format(_output_silk_layers))
 
-            if _output_silk_layers:
-                self.logger.info("Outputting silkscreen layers")
-                for text, value in text_locations.items():
-                    x_start = value["pos"][0]
-                    y_start = value["pos"][1]
-                    _string = value["string"]
+        if _output_silk_layers:
+            self.logger.info("Outputting silkscreen layers")
+            for text, value in text_locations.items():
+                x_start = value["pos"][0]
+                y_start = value["pos"][1]
+                _string = value["string"]
 
-                    for index, letter in enumerate(_string):
-                        if letter == " ":
-                            x_start += self.font_definition["space_char_width"] - self.font_definition["text_letter_gap"]
-                        else:
-                            try:
-                                _xmax = 0
-                                for coords in self.font_definition["letters"][str(letter)]:
-                                    # print(coords)
-                                    _x = (coords["x"] + x_start) * 10000
-                                    if (coords["x"] + x_start) > _xmax:
-                                        # Store the maximum X coord when drawing the letter
-                                        _xmax = (coords["x"] + x_start)
-                                    _y = (coords["y"] + y_start) * 10000
-                                    out_file.write("X{}Y{}{}*\n".format(int(_x), int(_y), coords["command"]))
+                self._add_text_to_silk_file(_string, _file, x_start, y_start)
 
-                                x_start = _xmax + self.font_definition["text_letter_gap"]
-                            except KeyError:
-                                self.logger.error("Letter '{}' not found in font definition file".format(letter))
-                                self.logger.error("Please try again with a different frame title")
-                                exit(1)
+                # for index, letter in enumerate(_string):
+                #     if letter == " ":
+                #         x_start += self.font_definition["space_char_width"] - self.font_definition["text_letter_gap"]
+                #     else:
+                #         try:
+                #             _xmax = 0
+                #             for coords in self.font_definition["letters"][str(letter)]:
+                #                 # print(coords)
+                #                 _x = (coords["x"] + x_start) * 10000
+                #                 if (coords["x"] + x_start) > _xmax:
+                #                     # Store the maximum X coord when drawing the letter
+                #                     _xmax = (coords["x"] + x_start)
+                #                 _y = (coords["y"] + y_start) * 10000
+                #                 out_file.write("X{}Y{}{}*\n".format(int(_x), int(_y), coords["command"]))
+                #
+                #             x_start = _xmax + self.font_definition["text_letter_gap"]
+                #         except KeyError:
+                #             self.logger.error("Letter '{}' not found in font definition file".format(letter))
+                #             self.logger.error("Please try again with a different frame title")
+                #             exit(1)
 
+            if self.config["Fabrication"]["add_order_number_placeholder"]:
+                _placeholder = self.config["Fabrication"]["order_number_placeholder_text"]
+                _placeholder_xstart = (self.panel_info["width"] / 2) - self._text_to_silk_mm(_placeholder)
+                _placeholder_ystart = self.panel_info["height"] - (float(self.config["PanelOptions"]["panel_width"]) / 2) - (self.text_size / 2)
+
+                self._add_text_to_silk_file(_placeholder, _file, _placeholder_xstart, _placeholder_ystart)
+
+        with open(_file, 'a') as out_file:
             out_file.write("M02*\n")
 
         # Write excellon drill file
