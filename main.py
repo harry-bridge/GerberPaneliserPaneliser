@@ -20,7 +20,7 @@ class Panel:
     Panelises a single gerber file into an array with mousebites, output it as an xml file that can
     be loaded straight into gerber panelizer so it can merged into one file.
     """
-    _version = 1.4
+    _version = 1.5
 
     temp_path = Path.cwd() / "temp"
 
@@ -143,7 +143,7 @@ class Panel:
         :return:
         """
         self.logger.info("Please input path to gerber file")
-        self.gerber_file_path = Path(input("File: ").strip().replace("\\ ", " "))
+        self.gerber_file_path = Path(input("File: ").strip().replace("\\", ""))
         # self.gerber_file_path = Path(self._temp_path)
         _found_profile_file = None
 
@@ -301,6 +301,44 @@ class Panel:
         self.logger.debug("Primitive array: {}".format(_primitive_array))
         return _primitive_array
 
+    def _check_panel_dims(self, width, height):
+        """
+        Checks the overall panel size is within certain bounds and displays warnings if not
+        1. Checks the panel is within the dimensions of your machines
+        2. Checks the surface area is withing manufacturer limits (if warning enabled)
+        3. Checks the panel is withing the manufacturer maximum dimensions
+        :param width: Width of the panel in mm
+        :param height: Height  of the panel in mm
+        :return:
+        """
+        _warning_index = 0
+
+        # Display a warning to the user if the dimensions will be outside the max dims in any orientation
+        if not (self.panel_info["width"] <= self.max_panel_dimensions[0] and self.panel_info["height"] <=
+                self.max_panel_dimensions[1]) and not \
+                (self.panel_info["width"] <= self.max_panel_dimensions[1] and self.panel_info["height"] <=
+                 self.max_panel_dimensions[0]):
+            _warning_index += 1
+            self.logger.warning("[#{}] Panel size is larger than max defined in config".format(_warning_index))
+            self.logger.warning("Max panel dimensions: {}mm x {}mm".format(self.max_panel_dimensions[0],
+                                                                           self.max_panel_dimensions[1]))
+
+        if (self.panel_info["surface_area"] > self.max_panel_surface_area) and \
+                bool(self.config["Fabrication"]["show_surface_area_warning"]):
+            _warning_index += 1
+            self.logger.warning("[#{}] Panel surface area is larger than max defined in config".format(_warning_index))
+            self.logger.warning("Max panel surface area: {}dm2".format(self.max_panel_surface_area))
+
+        # Display a warning to the user if the dimensions will be outside the max dims for the manufacturer in any orientation
+        if not (self.panel_info["width"] <= self._manf_max_panel_dimensions[0] and self.panel_info["height"] <=
+                self._manf_max_panel_dimensions[1]) and not \
+                (self.panel_info["width"] <= self._manf_max_panel_dimensions[1] and self.panel_info["height"] <=
+                 self._manf_max_panel_dimensions[0]):
+            _warning_index += 1
+            self.logger.warning("[#{}] Panel size is larger than manufacturer max".format(_warning_index))
+            self.logger.warning("Max manufacturer dimensions: {}mm x {}mm".format(self._manf_max_panel_dimensions[0],
+                                                                                  self._manf_max_panel_dimensions[1]))
+
     def _make_array(self):
         """
         Make the array of boards
@@ -315,14 +353,14 @@ class Panel:
 
         self.logger.info("= Title =")
         self.logger.info("Input title for panel frame")
-        self.logger.info("Default: {}".format(self.gerber_file_path.stem))
+        _default_title = self.gerber_file_path.stem.replace("_", " ")
+        self.logger.info("Default: {}".format(_default_title))
 
-        self.panel_info["title"] = input("Title: ").strip() or self.gerber_file_path.stem
+        self.panel_info["title"] = input("Title: ").strip() or _default_title
         self.logger.debug("Title for frame: {}".format(self.panel_info["title"]))
 
         # Get the user to enter the desired step in the X and Y direction for the panel
         while 1:
-            _warning_index = 0
             self.logger.info("= Repeat =")
             self.logger.info("How many boards to arrange in the X and Y directions")
             _x_repeat = self._try_int(input("X Repeat: "))
@@ -352,30 +390,8 @@ class Panel:
             self.logger.info("Panel surface area: {}dm2".format(round(self.panel_info["surface_area"], 4)))
             self.logger.info("Panel Size: {}mm x {}mm".format(self.panel_info["width"], self.panel_info["height"]))
 
-            # Display a warning to the user if the dimensions will be outside the max dims in any orientation
-            if not (self.panel_info["width"] <= self.max_panel_dimensions[0] and self.panel_info["height"] <= self.max_panel_dimensions[1]) and not \
-                    (self.panel_info["width"] <= self.max_panel_dimensions[1] and self.panel_info["height"] <= self.max_panel_dimensions[0]):
-
-                _warning_index += 1
-                self.logger.warning("[#{}] Panel size is larger than max defined in config".format(_warning_index))
-                self.logger.warning("Max panel dimensions: {}mm x {}mm".format(self.max_panel_dimensions[0],
-                                                                               self.max_panel_dimensions[1]))
-
-            if (self.panel_info["surface_area"] > self.max_panel_surface_area) and \
-                    bool(self.config["Fabrication"]["show_surface_area_warning"]):
-
-                _warning_index += 1
-                self.logger.warning("[#{}] Panel surface area is larger than max defined in config".format(_warning_index))
-                self.logger.warning("Max panel surface area: {}dm2".format(self.max_panel_surface_area))
-
-            # Display a warning to the user if the dimensions will be outside the max dims for the manufacturer in any orientation
-            if not (self.panel_info["width"] <= self._manf_max_panel_dimensions[0] and self.panel_info["height"] <= self._manf_max_panel_dimensions[1]) and not \
-                    (self.panel_info["width"] <= self._manf_max_panel_dimensions[1] and self.panel_info["height"] <= self._manf_max_panel_dimensions[0]):
-
-                _warning_index += 1
-                self.logger.warning("[#{}] Panel size is larger than manufacturer max".format(_warning_index))
-                self.logger.warning("Max manufacturer dimensions: {}mm x {}mm".format(self._manf_max_panel_dimensions[0],
-                                                                                      self._manf_max_panel_dimensions[1]))
+            # Display warnings if necessary
+            self._check_panel_dims(self.panel_info["width"], self.panel_info["height"])
 
             _size_ok = input("Panel size acceptable? (*Y/N): ") or "Y"
             if _size_ok.upper() == "Y":
@@ -455,9 +471,11 @@ class Panel:
             if _horiz_bars_every != 0 or _vert_bars_every != 0:
                 self.logger.info("New panel Size: {}mm x {}mm".format(self.panel_info["width"], self.panel_info["height"]))
 
-            _size_ok = input("Panel size acceptable? (Y/N): ") or "Y"
-            if _size_ok.upper() == "Y":
-                break
+                self._check_panel_dims(self.panel_info["width"], self.panel_info["height"])
+
+                _size_ok = input("Panel size acceptable? (Y/N): ") or "Y"
+                if _size_ok.upper() == "Y":
+                    break
 
         self.logger.info("= Mousebite locations =")
         self.logger.info("Locations are on a per board basis, any duplicate locations will be ignored")
@@ -657,7 +675,7 @@ class Panel:
         self.logger.info("== Writing panel generation report ==")
 
         _out_path = self.out_path / (self.gerber_file_path.stem + "-report.txt")
-        with open(_out_path, 'w') as out:
+        with open(_out_path, 'w', newline="\r\n") as out:
             out.write("=" * 40 + "\n")
             out.write("GerberPanelizer Paneliser - V{}\n".format(self._version))
             out.write("Panel file generation report for: {}\n".format(self.panel_info["title"]))
