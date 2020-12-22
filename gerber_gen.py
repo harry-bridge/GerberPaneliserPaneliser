@@ -447,12 +447,52 @@ class GerberGenerator:
         self._write_gerbers()
 
         _data = self._get_report_data()
-        # _data["gerber_location"] = self._zip_output_dir()
-        #
-        # self._clean_output_dir()
+        _data["gerber_location"] = self._zip_output_dir()
+
+        self._clean_output_dir()
         self.logger.info("= Finished writing frame gerbers =")
 
         return _data
+
+    def get_user_input(self, _config):
+        self.logger.info("== Gerber Panelizer Frame Generator ==")
+
+        _panel_dims = [0, 0]
+        _pcb_step = [0, 0]
+        _pcb_repeat = [0, 0]
+        _title = None
+
+        while 1:
+            if _panel_dims == [0, 0]:
+                try:
+                    _panel_dims[0] = float(input("Panel width: "))
+                    _panel_dims[1] = float(input("Panel height: "))
+                except ValueError:
+                    self.logger.warning("Value must be a real number")
+                    _panel_dims = [0, 0]
+                    continue
+
+            if _pcb_step == [0, 0]:
+                try:
+                    _pcb_step[0] = int(input("PCB step X: "))
+                    _pcb_step[0] = int(input("PCB step Y: "))
+                except ValueError:
+                    self.logger.warning("Value must be an integer")
+                    _pcb_step = [0, 0]
+                    continue
+
+            if _pcb_repeat == [0, 0]:
+                try:
+                    _pcb_repeat[0] = int(input("PCB repeat X: "))
+                    _pcb_repeat[0] = int(input("PCB repeat Y: "))
+                except ValueError:
+                    self.logger.warning("Value must be an integer")
+                    _pcb_repeat = [0, 0]
+                    continue
+
+            _title = input("Frame title: ")
+
+        self.make_frame_gerbers(_panel_dims, _pcb_step, _pcb_repeat, _title, Path.cwd(), _config)
 
 
 if __name__ == '__main__':
@@ -461,4 +501,5 @@ if __name__ == '__main__':
     config.read(_config_path)
     # Testing dimensions, in mm
     app = GerberGenerator()
-    app.make_frame_gerbers((100, 100), (5, 4), (25, 25), "Test. 12 34.0", Path.cwd(), config)
+    app.get_user_input(config)
+    # app.make_frame_gerbers((100, 100), (5, 4), (25, 25), "Test. 12 34.0", Path.cwd(), config)
