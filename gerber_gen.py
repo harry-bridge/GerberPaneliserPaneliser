@@ -189,8 +189,21 @@ class GerberGenerator:
         ]
         self.logger.debug("Drill coords: {}".format(self.drill_coords))
 
+        # Absolute coords for stencil apertures
+        # Aperture locations - tl: 0, tr: 1, bl: 2, br: 3
+        _panel_width = float(self.config["PanelOptions"]["panel_width"])
+        self.aperture_coords = [
+            (_panel_width / 2, round(self.panel_info["height"] - _panel_width - 5, 6)),
+            (round(self.panel_info["width"] - (_panel_width / 2), 6), round(self.panel_info["height"] - _panel_width - 5, 6)),
+            (_panel_width / 2, _panel_width + 5),
+            (round(self.panel_info["width"] - (_panel_width / 2), 6), self.panel_info["height"] - _panel_width - 5),
+        ]
+
         # Get file names from config file
         _file_names = self.config["GerberFilenames"]
+
+        _aperture_size = float(self.config["Fabrication"]["frame_stencil_aperture_size"]) * 1.5
+        _roundness = 0.24
 
         # Top and bottom copper have the same content, top and bottom fiducials
         _files = [self.out_path / _file_names["top_copper"], self.out_path / _file_names["bottom_copper"]]
@@ -202,13 +215,39 @@ class GerberGenerator:
 
                 out_file.write("G01*\n")
                 out_file.write("%ADD10C,{:.6f}*%\n".format(float(self.fid_dia)))
-                out_file.write("\n")
-                out_file.write("D10*\n")
 
+                out_file.write("%ADD11R,{:.6f}X{:.6f}*%\n".format(_aperture_size - _roundness, _aperture_size - _roundness))
+                out_file.write("%ADD12C,{:.6f}*%\n".format(_roundness))
+                out_file.write("\n")
+
+                out_file.write("D10*\n")
                 for loc in self.fid_coords:
                     out_file.write("X{}Y{}D03*\n".format(int(loc[0] * 10000), int(loc[1] * 10000)))
 
+                if self.config["Fabrication"]["add_frame_stencil_apertures"].lower() == "true":
+                    _aperture_locations = self.config["Fabrication"]["frame_stencil_aperture_locations"].replace(' ', '').split(',')
+                    _aperture_locations = [int(x) for x in _aperture_locations]
+
+                    for _location in _aperture_locations:
+                        out_file.write("D11*\n")
+                        _aperture_coords = self.aperture_coords[_location]
+                        out_file.write("X{}Y{}D03*\n".format(_aperture_coords[0] * 10000, _aperture_coords[1] * 10000))
+                        out_file.write("D12*\n")
+
+                        out_file.write("X{}Y{}D02*\n".format((_aperture_coords[0] - _aperture_size / 2 + _roundness / 2) * 10000,
+                                                             (_aperture_coords[1] - _aperture_size / 2 + _roundness / 2) * 10000))
+                        out_file.write("X{}Y{}D01*\n".format((_aperture_coords[0] - _aperture_size / 2 + _roundness / 2) * 10000,
+                                                             (_aperture_coords[1] + _aperture_size / 2 - _roundness / 2) * 10000))
+                        out_file.write("X{}Y{}D01*\n".format((_aperture_coords[0] + _aperture_size / 2 - _roundness / 2) * 10000,
+                                                             (_aperture_coords[1] + _aperture_size / 2 - _roundness / 2) * 10000))
+                        out_file.write("X{}Y{}D01*\n".format((_aperture_coords[0] + _aperture_size / 2 - _roundness / 2) * 10000,
+                                                             (_aperture_coords[1] - _aperture_size / 2 + _roundness / 2) * 10000))
+                        out_file.write("X{}Y{}D01*\n".format((_aperture_coords[0] - _aperture_size / 2 + _roundness / 2) * 10000,
+                                                             (_aperture_coords[1] - _aperture_size / 2 + _roundness / 2) * 10000))
+
                 out_file.write("M02*\n")
+
+        _aperture_size = float(self.config["Fabrication"]["frame_stencil_aperture_size"])
 
         # Top and bottom soldermask layers have the same content, fiducials and mask for drills
         _files = [self.out_path / _file_names["top_soldermask"], self.out_path / _file_names["bottom_soldermask"]]
@@ -220,22 +259,45 @@ class GerberGenerator:
 
                 out_file.write("G01*\n")
                 out_file.write("%ADD10C,{:.6f}*%\n".format(float(self.fid_soldermask_dia)))
-                out_file.write("%ADD11C,3.203200*%\n")
+                out_file.write("%ADD11R,{:.6f}X{:.6f}*%\n".format(_aperture_size - _roundness, _aperture_size - _roundness))
+                out_file.write("%ADD12C,{:.6f}*%\n".format(_roundness))
+                out_file.write("%ADD13C,3.203200*%\n")
+
                 out_file.write("\n")
 
                 out_file.write("D10*\n")
                 for loc in self.fid_coords:
                     out_file.write("X{}Y{}D03*\n".format(int(loc[0] * 10000), int(loc[1] * 10000)))
 
-                out_file.write("D11*\n")
+                out_file.write("D13*\n")
                 for loc in self.drill_coords:
                     out_file.write("X{}Y{}D03*\n".format(int(loc[0] * 10000), int(loc[1] * 10000)))
+
+                if self.config["Fabrication"]["add_frame_stencil_apertures"].lower() == "true":
+                    _aperture_locations = self.config["Fabrication"]["frame_stencil_aperture_locations"].replace(' ', '').split(',')
+                    _aperture_locations = [int(x) for x in _aperture_locations]
+
+                    for _location in _aperture_locations:
+                        out_file.write("D11*\n")
+                        _aperture_coords = self.aperture_coords[_location]
+                        out_file.write("X{}Y{}D03*\n".format(_aperture_coords[0] * 10000, _aperture_coords[1] * 10000))
+                        out_file.write("D12*\n")
+
+                        out_file.write("X{}Y{}D02*\n".format((_aperture_coords[0] - _aperture_size / 2 + _roundness / 2) * 10000,
+                                                             (_aperture_coords[1] - _aperture_size / 2 + _roundness / 2) * 10000))
+                        out_file.write("X{}Y{}D01*\n".format((_aperture_coords[0] - _aperture_size / 2 + _roundness / 2) * 10000,
+                                                             (_aperture_coords[1] + _aperture_size / 2 - _roundness / 2) * 10000))
+                        out_file.write("X{}Y{}D01*\n".format((_aperture_coords[0] + _aperture_size / 2 - _roundness / 2) * 10000,
+                                                             (_aperture_coords[1] + _aperture_size / 2 - _roundness / 2) * 10000))
+                        out_file.write("X{}Y{}D01*\n".format((_aperture_coords[0] + _aperture_size / 2 - _roundness / 2) * 10000,
+                                                             (_aperture_coords[1] - _aperture_size / 2 + _roundness / 2) * 10000))
+                        out_file.write("X{}Y{}D01*\n".format((_aperture_coords[0] - _aperture_size / 2 + _roundness / 2) * 10000,
+                                                             (_aperture_coords[1] - _aperture_size / 2 + _roundness / 2) * 10000))
 
                 out_file.write("M02*\n")
 
         # Make silkscreen layers
         self._load_font()
-        _font_height = 1
         _file = self.out_path / _file_names["top_silkscreen"]
         self.file_list.append(_file)
         self.logger.debug("Writing gerber file: {}".format(_file.name))
@@ -308,7 +370,7 @@ class GerberGenerator:
             if self.config["Fabrication"]["add_order_number_placeholder"].lower() == 'true':
                 _placeholder = self.config["Fabrication"]["order_number_placeholder_text"]
                 _placeholder_xstart = (self.panel_info["width"] / 2) - self._text_to_silk_mm(_placeholder)
-                _placeholder_ystart = self.panel_info["height"] - (float(self.config["PanelOptions"]["panel_width"]) / 2) - (self.text_size / 2)
+                _placeholder_ystart = self.panel_info["height"] - (_panel_width / 2) - (self.text_size / 2)
 
                 self._add_text_to_silk_file(_placeholder, _file, _placeholder_xstart, _placeholder_ystart)
 

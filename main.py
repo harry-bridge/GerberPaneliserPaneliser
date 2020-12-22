@@ -20,7 +20,7 @@ class Panel:
     Panelises a single gerber file into an array with mousebites, output it as an xml file that can
     be loaded straight into gerber panelizer so it can merged into one file.
     """
-    _version = 1.5
+    _version = 1.6
 
     temp_path = Path.cwd() / "temp"
 
