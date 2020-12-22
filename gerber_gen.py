@@ -53,7 +53,11 @@ class GerberGenerator:
     # List of file paths to compress into a single zip archive
     file_list = list()
     font_definition = None
-    text_size = 1
+    # How high to make the text
+    text_size = 1.2
+    # How thick to make the text as a percentage of the height
+    # i.e for 1.2mm text, a ratio of 10% will result in 0.12mm thick text
+    text_ratio = 10
 
     logger = None
 
@@ -115,37 +119,43 @@ class GerberGenerator:
         :param text: A string of text to get the mm length of
         :return: The length of the string in mm when on the PCB
         """
-        _char_width = self.font_definition["char_width"]
-        # Remove all the spaces from the string to find the length relating to the letters
-        _string_len = len(text.replace(' ', '')) * _char_width
-        # Use upper char space as this is the worst case scenario
-        _string_len += (len(text.split(' ')) - 1) * self.font_definition["char_width"]
+        _string_len = 0
+
+        for letter in text:
+            if letter == " ":
+                # Space char width
+                _string_len += self.font_definition['space_char_width']
+            else:
+                _string_len += (self.font_definition['letters'][letter]['width'] * self.text_size) + \
+                               (self.font_definition['text_letter_gap'] * self.text_size)
 
         return _string_len
 
     def _add_text_to_silk_file(self, text, file, x_start, y_start):
         """
         Adds a sting of text to the given silkscreen file
-        :param text:
-        :param file:
+        :param text: String of text to write to the silkscreen file
+        :param file: File to write the silkscreen information to
         :return:
         """
+        # Remove leading and trailing whitespace in the text
+        _text = text.strip()
 
         with open(file, 'a') as out_file:
-            for index, letter in enumerate(text):
+            for index, letter in enumerate(_text):
                 if letter == " ":
                     x_start += self.font_definition["space_char_width"] - self.font_definition["text_letter_gap"]
                 else:
                     try:
                         _xmax = 0
-                        for coords in self.font_definition["letters"][str(letter)]:
+                        for coords in self.font_definition["letters"][str(letter)]['coords']:
                             # print(coords)
-                            _x = (coords["x"] + x_start) * 10000
-                            if (coords["x"] + x_start) > _xmax:
+                            _x = ((coords["x"] * self.text_size) + x_start)
+                            if _x > _xmax:
                                 # Store the maximum X coord when drawing the letter
-                                _xmax = (coords["x"] + x_start)
-                            _y = (coords["y"] + y_start) * 10000
-                            out_file.write("X{}Y{}{}*\n".format(int(_x), int(_y), coords["command"]))
+                                _xmax = _x
+                            _y = ((coords["y"] * self.text_size) + y_start)
+                            out_file.write("X{}Y{}{}*\n".format(int(_x * 10000), int(_y * 10000), coords["command"]))
 
                         x_start = _xmax + self.font_definition["text_letter_gap"]
                     except KeyError:
@@ -233,10 +243,12 @@ class GerberGenerator:
             out_file.writelines(gerber_header.format(_file.stem))
 
             out_file.write("G01*\n")
-            out_file.write("%ADD10C,0.076200*%\n")
+            _text_aperture = (self.text_size * (self.text_ratio / 100)) - 0.004
+            out_file.write("%ADD10C,{}*%\n".format(_text_aperture))
             out_file.write("\n")
             out_file.write("D10*\n")
 
+        # Repeat and Step x coords are determined dynamically based on text size
         text_locations = {
             "title": {"pos": [25.4, 5.3 - (self.text_size / 2)],
                       "string": self.panel_info["title"]
@@ -293,28 +305,7 @@ class GerberGenerator:
 
                 self._add_text_to_silk_file(_string, _file, x_start, y_start)
 
-                # for index, letter in enumerate(_string):
-                #     if letter == " ":
-                #         x_start += self.font_definition["space_char_width"] - self.font_definition["text_letter_gap"]
-                #     else:
-                #         try:
-                #             _xmax = 0
-                #             for coords in self.font_definition["letters"][str(letter)]:
-                #                 # print(coords)
-                #                 _x = (coords["x"] + x_start) * 10000
-                #                 if (coords["x"] + x_start) > _xmax:
-                #                     # Store the maximum X coord when drawing the letter
-                #                     _xmax = (coords["x"] + x_start)
-                #                 _y = (coords["y"] + y_start) * 10000
-                #                 out_file.write("X{}Y{}{}*\n".format(int(_x), int(_y), coords["command"]))
-                #
-                #             x_start = _xmax + self.font_definition["text_letter_gap"]
-                #         except KeyError:
-                #             self.logger.error("Letter '{}' not found in font definition file".format(letter))
-                #             self.logger.error("Please try again with a different frame title")
-                #             exit(1)
-
-            if self.config["Fabrication"]["add_order_number_placeholder"]:
+            if self.config["Fabrication"]["add_order_number_placeholder"].lower() == 'true':
                 _placeholder = self.config["Fabrication"]["order_number_placeholder_text"]
                 _placeholder_xstart = (self.panel_info["width"] / 2) - self._text_to_silk_mm(_placeholder)
                 _placeholder_ystart = self.panel_info["height"] - (float(self.config["PanelOptions"]["panel_width"]) / 2) - (self.text_size / 2)
@@ -389,9 +380,9 @@ class GerberGenerator:
         self._write_gerbers()
 
         _data = self._get_report_data()
-        _data["gerber_location"] = self._zip_output_dir()
-
-        self._clean_output_dir()
+        # _data["gerber_location"] = self._zip_output_dir()
+        #
+        # self._clean_output_dir()
         self.logger.info("= Finished writing frame gerbers =")
 
         return _data

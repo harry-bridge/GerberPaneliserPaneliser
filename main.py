@@ -301,7 +301,7 @@ class Panel:
         self.logger.debug("Primitive array: {}".format(_primitive_array))
         return _primitive_array
 
-    def _check_panel_dims(self, width, height):
+    def _check_panel_dims(self):
         """
         Checks the overall panel size is within certain bounds and displays warnings if not
         1. Checks the panel is within the dimensions of your machines
@@ -324,7 +324,7 @@ class Panel:
                                                                            self.max_panel_dimensions[1]))
 
         if (self.panel_info["surface_area"] > self.max_panel_surface_area) and \
-                bool(self.config["Fabrication"]["show_surface_area_warning"]):
+                self.config["Fabrication"]["show_surface_area_warning"].lower() == 'true':
             _warning_index += 1
             self.logger.warning("[#{}] Panel surface area is larger than max defined in config".format(_warning_index))
             self.logger.warning("Max panel surface area: {}dm2".format(self.max_panel_surface_area))
@@ -391,7 +391,7 @@ class Panel:
             self.logger.info("Panel Size: {}mm x {}mm".format(self.panel_info["width"], self.panel_info["height"]))
 
             # Display warnings if necessary
-            self._check_panel_dims(self.panel_info["width"], self.panel_info["height"])
+            self._check_panel_dims()
 
             _size_ok = input("Panel size acceptable? (*Y/N): ") or "Y"
             if _size_ok.upper() == "Y":
