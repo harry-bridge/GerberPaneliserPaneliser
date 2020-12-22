@@ -191,12 +191,13 @@ class GerberGenerator:
 
         # Absolute coords for stencil apertures
         # Aperture locations - tl: 0, tr: 1, bl: 2, br: 3
+        # (X, Y, bottom_mirror_index)
         _panel_width = float(self.config["PanelOptions"]["panel_width"])
         self.aperture_coords = [
-            (_panel_width / 2, round(self.panel_info["height"] - _panel_width - 5, 6)),
-            (round(self.panel_info["width"] - (_panel_width / 2), 6), round(self.panel_info["height"] - _panel_width - 5, 6)),
-            (_panel_width / 2, _panel_width + 5),
-            (round(self.panel_info["width"] - (_panel_width / 2), 6), self.panel_info["height"] - _panel_width - 5),
+            (_panel_width / 2, round(self.panel_info["height"] - _panel_width - 5, 6), 1),
+            (round(self.panel_info["width"] - (_panel_width / 2), 6), round(self.panel_info["height"] - _panel_width - 5, 6), 0),
+            (_panel_width / 2, _panel_width + 5, 3),
+            (round(self.panel_info["width"] - (_panel_width / 2), 6), _panel_width + 5, 2),
         ]
 
         # Get file names from config file
@@ -227,6 +228,8 @@ class GerberGenerator:
                 if self.config["Fabrication"]["add_frame_stencil_apertures"].lower() == "true":
                     _aperture_locations = self.config["Fabrication"]["frame_stencil_aperture_locations"].replace(' ', '').split(',')
                     _aperture_locations = [int(x) for x in _aperture_locations]
+                    if "bottom" in str(_file):
+                        _aperture_locations = [self.aperture_coords[x][2] for x in _aperture_locations]
 
                     for _location in _aperture_locations:
                         out_file.write("D11*\n")
@@ -276,6 +279,8 @@ class GerberGenerator:
                 if self.config["Fabrication"]["add_frame_stencil_apertures"].lower() == "true":
                     _aperture_locations = self.config["Fabrication"]["frame_stencil_aperture_locations"].replace(' ', '').split(',')
                     _aperture_locations = [int(x) for x in _aperture_locations]
+                    if "bottom" in str(_file):
+                        _aperture_locations = [self.aperture_coords[x][2] for x in _aperture_locations]
 
                     for _location in _aperture_locations:
                         out_file.write("D11*\n")
