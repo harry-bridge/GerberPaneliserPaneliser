@@ -451,6 +451,7 @@ class Panel:
                 # The router width the other side of the support is already taken care of in the case of a normal array w/o supports
                 _extra_width = math.floor((_x_repeat - 1) / _vert_bars_every) * (float(self.config["PanelOptions"]["support_bar_width"]) + self.route_diameter)
                 self.panel_info["width"] += _extra_width
+                self.panel_info["step_x"] += float(self.config["PanelOptions"]["support_bar_width"]) + self.route_diameter
 
                 # Issue a warning to the user if the maths doesn't quite work
                 if ((_x_repeat - 1) % _vert_bars_every) != 0:
@@ -461,6 +462,7 @@ class Panel:
                 self.logger.debug("Horizontal supports every: {}, total: {}".format(_horiz_bars_every, math.floor((_y_repeat - 1) / _horiz_bars_every)))
                 _extra_height = math.floor((_y_repeat - 1) / _horiz_bars_every) * (float(self.config["PanelOptions"]["support_bar_width"]) + self.route_diameter)
                 self.panel_info["height"] += _extra_height
+                self.panel_info["step_y"] += float(self.config["PanelOptions"]["support_bar_width"]) + self.route_diameter
 
                 # Issue a warning to the user if the maths doesn't quite work
                 if ((_y_repeat - 1) % _horiz_bars_every) != 0:
@@ -471,9 +473,9 @@ class Panel:
             if _horiz_bars_every != 0 or _vert_bars_every != 0:
                 self.logger.info("New panel Size: {}mm x {}mm".format(self.panel_info["width"], self.panel_info["height"]))
 
-                self._check_panel_dims(self.panel_info["width"], self.panel_info["height"])
+                self._check_panel_dims()
 
-                _size_ok = input("Panel size acceptable? (Y/N): ") or "Y"
+                _size_ok = input("Panel size acceptable? (*Y/N): ") or "Y"
                 if _size_ok.upper() == "Y":
                     break
 
