@@ -580,8 +580,8 @@ class Panel:
             # Calculate the location from each of the fiducials to the origin of the first board
             _fids_to_board_0.append(
                 (
-                    round(_loc[0] + (self.pcb_info["origin_x"] + _panel_to_board_offset), 4),
-                    round(_loc[1] + (self.pcb_info["origin_y"] + _panel_to_board_offset), 4)
+                    round(_loc[0] - (self.pcb_info["origin_x"] + _panel_to_board_offset), 4),
+                    round(_loc[1] - (self.pcb_info["origin_y"] + _panel_to_board_offset), 4)
                 )
             )
 
@@ -701,11 +701,11 @@ class Panel:
             out.write("\n")
 
             out.write("== Panel Fiducials ==\n")
-            out.write("Fiducial locations (X, Y):\n")
             _fids_order = ["BL", "BR", "TL", "TR"]
-            for index, _loc in enumerate(self.panel_frame_info["fiducial_locations"]):
-                out.write("  {} - {}\n".format(_fids_order[index], _loc))
-            out.write("\n")
+            # out.write("Fiducial locations (X, Y):\n")
+            # for index, _loc in enumerate(self.panel_frame_info["fiducial_locations"]):
+            #     out.write("  {} - {}\n".format(_fids_order[index], _loc))
+            # out.write("\n")
 
             out.write("Fiducials to board 0 (X, Y)\n")
             for index, _loc in enumerate(self.panel_frame_info["fid_to_board_0_locations"]):
