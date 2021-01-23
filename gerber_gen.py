@@ -1,13 +1,14 @@
 #! /usr/bin/env python3
 
+import datetime
 import json
+import logging
+import shutil
 from configparser import ConfigParser
 from pathlib import Path
-import datetime
-import logzero
-import logging
 from zipfile import ZipFile
-import shutil
+
+import logzero
 
 # Partial header for gerber file generation
 gerber_header = """G04 Paneliser Gerber RS-274X export*
@@ -58,6 +59,9 @@ class GerberGenerator:
     # How thick to make the text as a percentage of the height
     # i.e for 1.2mm text, a ratio of 10% will result in 0.12mm thick text
     text_ratio = 10
+
+    # Optionally don't zip the output when running for debug purposes
+    zip_output = True
 
     logger = None
 
@@ -131,7 +135,7 @@ class GerberGenerator:
 
         return _string_len
 
-    def _add_text_to_silk_file(self, text, file, x_start, y_start):
+    def _add_text_to_silk_file(self, text, file, x_start, y_start, mirror=False):
         """
         Adds a sting of text to the given silkscreen file
         :param text: String of text to write to the silkscreen file
@@ -141,27 +145,48 @@ class GerberGenerator:
         # Remove leading and trailing whitespace in the text
         _text = text.strip()
 
+        mirror_scalar = 1
+        if mirror:
+            mirror_scalar = -1
+
+        self.logger.debug("Writing string: {}".format(_text))
+
         with open(file, 'a') as out_file:
             for index, letter in enumerate(_text):
                 if letter == " ":
-                    x_start += self.font_definition["space_char_width"] - self.font_definition["text_letter_gap"]
+                    x_start += ((self.font_definition["space_char_width"] - self.font_definition["text_letter_gap"]) * mirror_scalar)
                 else:
                     try:
-                        _xmax = 0
+                        _xmax = x_start
                         for coords in self.font_definition["letters"][str(letter)]['coords']:
                             # print(coords)
-                            _x = ((coords["x"] * self.text_size) + x_start)
-                            if _x > _xmax:
+                            _x = (((coords["x"] * mirror_scalar) * self.text_size) + x_start)
+
+                            if (_x > _xmax) and not mirror:
                                 # Store the maximum X coord when drawing the letter
                                 _xmax = _x
+                            elif _x < _xmax and mirror:
+                                _xmax = _x
+
                             _y = ((coords["y"] * self.text_size) + y_start)
                             out_file.write("X{}Y{}{}*\n".format(int(_x * 10000), int(_y * 10000), coords["command"]))
 
-                        x_start = _xmax + self.font_definition["text_letter_gap"]
+                        x_start = _xmax + (self.font_definition["text_letter_gap"] * mirror_scalar)
                     except KeyError:
                         self.logger.error("Letter '{}' not found in font definition file".format(letter))
                         self.logger.error("Please try again with a different frame title")
                         exit(1)
+
+    def _add_fiducial_apertures_to_file(self, text, file, x_start, y_start, mirror=False):
+        """
+
+        :param text:
+        :param file:
+        :param x_start:
+        :param y_start:
+        :param mirror:
+        :return:
+        """
 
     def _write_gerbers(self):
         """
@@ -203,7 +228,7 @@ class GerberGenerator:
         # Get file names from config file
         _file_names = self.config["GerberFilenames"]
 
-        _aperture_size = float(self.config["Fabrication"]["frame_stencil_aperture_size"]) * 1.5
+        _aperture_size = float(self.config["Fabrication"]["frame_stencil_aperture_size"])
         _roundness = 0.24
 
         # Top and bottom copper have the same content, top and bottom fiducials
@@ -223,7 +248,7 @@ class GerberGenerator:
 
                 out_file.write("D10*\n")
                 for loc in self.fid_coords:
-                    out_file.write("X{}Y{}D03*\n".format(int(loc[0] * 10000), int(loc[1] * 10000)))
+                    out_file.write("X{:.0f}Y{:.0f}D03*\n".format(loc[0] * 10000, loc[1] * 10000))
 
                 if self.config["Fabrication"]["add_frame_stencil_apertures"].lower() == "true":
                     _aperture_locations = self.config["Fabrication"]["frame_stencil_aperture_locations"].replace(' ', '').split(',')
@@ -234,23 +259,74 @@ class GerberGenerator:
                     for _location in _aperture_locations:
                         out_file.write("D11*\n")
                         _aperture_coords = self.aperture_coords[_location]
-                        out_file.write("X{}Y{}D03*\n".format(_aperture_coords[0] * 10000, _aperture_coords[1] * 10000))
+                        out_file.write("X{:.0f}Y{:.0f}D03*\n".format(_aperture_coords[0] * 10000, _aperture_coords[1] * 10000))
                         out_file.write("D12*\n")
 
-                        out_file.write("X{}Y{}D02*\n".format((_aperture_coords[0] - _aperture_size / 2 + _roundness / 2) * 10000,
-                                                             (_aperture_coords[1] - _aperture_size / 2 + _roundness / 2) * 10000))
-                        out_file.write("X{}Y{}D01*\n".format((_aperture_coords[0] - _aperture_size / 2 + _roundness / 2) * 10000,
-                                                             (_aperture_coords[1] + _aperture_size / 2 - _roundness / 2) * 10000))
-                        out_file.write("X{}Y{}D01*\n".format((_aperture_coords[0] + _aperture_size / 2 - _roundness / 2) * 10000,
-                                                             (_aperture_coords[1] + _aperture_size / 2 - _roundness / 2) * 10000))
-                        out_file.write("X{}Y{}D01*\n".format((_aperture_coords[0] + _aperture_size / 2 - _roundness / 2) * 10000,
-                                                             (_aperture_coords[1] - _aperture_size / 2 + _roundness / 2) * 10000))
-                        out_file.write("X{}Y{}D01*\n".format((_aperture_coords[0] - _aperture_size / 2 + _roundness / 2) * 10000,
-                                                             (_aperture_coords[1] - _aperture_size / 2 + _roundness / 2) * 10000))
+                        out_file.write("X{:.0f}Y{:.0f}D02*\n".format((_aperture_coords[0] - _aperture_size / 2 + _roundness / 2) * 10000,
+                                                                     (_aperture_coords[1] - _aperture_size / 2 + _roundness / 2) * 10000))
+
+                        out_file.write("X{:.0f}Y{:.0f}D01*\n".format((_aperture_coords[0] - _aperture_size / 2 + _roundness / 2) * 10000,
+                                                                     (_aperture_coords[1] + _aperture_size / 2 - _roundness / 2) * 10000))
+
+                        out_file.write("X{:.0f}Y{:.0f}D01*\n".format((_aperture_coords[0] + _aperture_size / 2 - _roundness / 2) * 10000,
+                                                                     (_aperture_coords[1] + _aperture_size / 2 - _roundness / 2) * 10000))
+
+                        out_file.write("X{:.0f}Y{:.0f}D01*\n".format((_aperture_coords[0] + _aperture_size / 2 - _roundness / 2) * 10000,
+                                                                     (_aperture_coords[1] - _aperture_size / 2 + _roundness / 2) * 10000))
+
+                        out_file.write("X{:.0f}Y{:.0f}D01*\n".format((_aperture_coords[0] - _aperture_size / 2 + _roundness / 2) * 10000,
+                                                                     (_aperture_coords[1] - _aperture_size / 2 + _roundness / 2) * 10000))
 
                 out_file.write("M02*\n")
 
-        _aperture_size = float(self.config["Fabrication"]["frame_stencil_aperture_size"])
+        # Top and bottom paste have the same content, top and bottom fiducials
+        _files = [self.out_path / _file_names["top_paste"], self.out_path / _file_names["bottom_paste"]]
+        for _file in _files:
+            self.file_list.append(_file)
+            self.logger.debug("Writing gerber file: {}".format(_file.name))
+            with open(_file, 'w') as out_file:
+                out_file.writelines(gerber_header.format(_file.stem))
+
+                out_file.write("G01*\n")
+                out_file.write("%ADD11R,{:.6f}X{:.6f}*%\n".format(_aperture_size - _roundness, _aperture_size - _roundness))
+                out_file.write("%ADD12C,{:.6f}*%\n".format(_roundness))
+                out_file.write("\n")
+
+                # out_file.write("D10*\n")
+                # for loc in self.fid_coords:
+                #     out_file.write("X{:.0f}Y{:.0f}D03*\n".format(loc[0] * 10000, loc[1] * 10000))
+
+                if self.config["Fabrication"]["add_frame_stencil_apertures"].lower() == "true":
+                    _aperture_locations = self.config["Fabrication"]["frame_stencil_aperture_locations"].replace(' ', '').split(',')
+                    _aperture_locations = [int(x) for x in _aperture_locations]
+                    if "bottom" in str(_file):
+                        _aperture_locations = [self.aperture_coords[x][2] for x in _aperture_locations]
+
+                    for _location in _aperture_locations:
+                        out_file.write("D11*\n")
+                        _aperture_coords = self.aperture_coords[_location]
+                        out_file.write("X{:.0f}Y{:.0f}D03*\n".format(_aperture_coords[0] * 10000, _aperture_coords[1] * 10000))
+                        out_file.write("D12*\n")
+
+                        out_file.write("X{:.0f}Y{:.0f}D02*\n".format((_aperture_coords[0] - _aperture_size / 2 + _roundness / 2) * 10000,
+                                                                     (_aperture_coords[1] - _aperture_size / 2 + _roundness / 2) * 10000))
+
+                        out_file.write("X{:.0f}Y{:.0f}D01*\n".format((_aperture_coords[0] - _aperture_size / 2 + _roundness / 2) * 10000,
+                                                                     (_aperture_coords[1] + _aperture_size / 2 - _roundness / 2) * 10000))
+
+                        out_file.write("X{:.0f}Y{:.0f}D01*\n".format((_aperture_coords[0] + _aperture_size / 2 - _roundness / 2) * 10000,
+                                                                     (_aperture_coords[1] + _aperture_size / 2 - _roundness / 2) * 10000))
+
+                        out_file.write("X{:.0f}Y{:.0f}D01*\n".format((_aperture_coords[0] + _aperture_size / 2 - _roundness / 2) * 10000,
+                                                                     (_aperture_coords[1] - _aperture_size / 2 + _roundness / 2) * 10000))
+
+                        out_file.write("X{:.0f}Y{:.0f}D01*\n".format((_aperture_coords[0] - _aperture_size / 2 + _roundness / 2) * 10000,
+                                                                     (_aperture_coords[1] - _aperture_size / 2 + _roundness / 2) * 10000))
+
+                out_file.write("M02*\n")
+
+        _aperture_size = float(self.config["Fabrication"]["frame_stencil_aperture_size"]) + \
+                         (float(self.config["Fabrication"]["frame_stencil_aperture_border"]) * 2)
 
         # Top and bottom soldermask layers have the same content, fiducials and mask for drills
         _files = [self.out_path / _file_names["top_soldermask"], self.out_path / _file_names["bottom_soldermask"]]
@@ -270,11 +346,11 @@ class GerberGenerator:
 
                 out_file.write("D10*\n")
                 for loc in self.fid_coords:
-                    out_file.write("X{}Y{}D03*\n".format(int(loc[0] * 10000), int(loc[1] * 10000)))
+                    out_file.write("X{:.0f}Y{:.0f}D03*\n".format(loc[0] * 10000, loc[1] * 10000))
 
                 out_file.write("D13*\n")
                 for loc in self.drill_coords:
-                    out_file.write("X{}Y{}D03*\n".format(int(loc[0] * 10000), int(loc[1] * 10000)))
+                    out_file.write("X{:.0f}Y{:.0f}D03*\n".format(loc[0] * 10000, loc[1] * 10000))
 
                 if self.config["Fabrication"]["add_frame_stencil_apertures"].lower() == "true":
                     _aperture_locations = self.config["Fabrication"]["frame_stencil_aperture_locations"].replace(' ', '').split(',')
@@ -285,102 +361,117 @@ class GerberGenerator:
                     for _location in _aperture_locations:
                         out_file.write("D11*\n")
                         _aperture_coords = self.aperture_coords[_location]
-                        out_file.write("X{}Y{}D03*\n".format(_aperture_coords[0] * 10000, _aperture_coords[1] * 10000))
+                        out_file.write("X{:.0f}Y{:.0f}D03*\n".format(_aperture_coords[0] * 10000, _aperture_coords[1] * 10000))
                         out_file.write("D12*\n")
 
-                        out_file.write("X{}Y{}D02*\n".format((_aperture_coords[0] - _aperture_size / 2 + _roundness / 2) * 10000,
-                                                             (_aperture_coords[1] - _aperture_size / 2 + _roundness / 2) * 10000))
-                        out_file.write("X{}Y{}D01*\n".format((_aperture_coords[0] - _aperture_size / 2 + _roundness / 2) * 10000,
-                                                             (_aperture_coords[1] + _aperture_size / 2 - _roundness / 2) * 10000))
-                        out_file.write("X{}Y{}D01*\n".format((_aperture_coords[0] + _aperture_size / 2 - _roundness / 2) * 10000,
-                                                             (_aperture_coords[1] + _aperture_size / 2 - _roundness / 2) * 10000))
-                        out_file.write("X{}Y{}D01*\n".format((_aperture_coords[0] + _aperture_size / 2 - _roundness / 2) * 10000,
-                                                             (_aperture_coords[1] - _aperture_size / 2 + _roundness / 2) * 10000))
-                        out_file.write("X{}Y{}D01*\n".format((_aperture_coords[0] - _aperture_size / 2 + _roundness / 2) * 10000,
-                                                             (_aperture_coords[1] - _aperture_size / 2 + _roundness / 2) * 10000))
+                        out_file.write("X{:.0f}Y{:.0f}D02*\n".format((_aperture_coords[0] - _aperture_size / 2 + _roundness / 2) * 10000,
+                                                                     (_aperture_coords[1] - _aperture_size / 2 + _roundness / 2) * 10000))
+
+                        out_file.write("X{:.0f}Y{:.0f}D01*\n".format((_aperture_coords[0] - _aperture_size / 2 + _roundness / 2) * 10000,
+                                                                     (_aperture_coords[1] + _aperture_size / 2 - _roundness / 2) * 10000))
+
+                        out_file.write("X{:.0f}Y{:.0f}D01*\n".format((_aperture_coords[0] + _aperture_size / 2 - _roundness / 2) * 10000,
+                                                                     (_aperture_coords[1] + _aperture_size / 2 - _roundness / 2) * 10000))
+
+                        out_file.write("X{:.0f}Y{:.0f}D01*\n".format((_aperture_coords[0] + _aperture_size / 2 - _roundness / 2) * 10000,
+                                                                     (_aperture_coords[1] - _aperture_size / 2 + _roundness / 2) * 10000))
+
+                        out_file.write("X{:.0f}Y{:.0f}D01*\n".format((_aperture_coords[0] - _aperture_size / 2 + _roundness / 2) * 10000,
+                                                                     (_aperture_coords[1] - _aperture_size / 2 + _roundness / 2) * 10000))
 
                 out_file.write("M02*\n")
 
         # Make silkscreen layers
         self._load_font()
-        _file = self.out_path / _file_names["top_silkscreen"]
-        self.file_list.append(_file)
-        self.logger.debug("Writing gerber file: {}".format(_file.name))
-        with open(_file, 'w') as out_file:
-            out_file.writelines(gerber_header.format(_file.stem))
+        _files = [self.out_path / _file_names["top_silkscreen"], self.out_path / _file_names["bottom_silkscreen"]]
+        for _file in _files:
+            self.file_list.append(_file)
+            self.logger.debug("Writing gerber file: {}".format(_file.name))
+            with open(_file, 'w') as out_file:
+                out_file.writelines(gerber_header.format(_file.stem))
 
-            out_file.write("G01*\n")
-            _text_aperture = (self.text_size * (self.text_ratio / 100)) - 0.004
-            out_file.write("%ADD10C,{}*%\n".format(_text_aperture))
-            out_file.write("\n")
-            out_file.write("D10*\n")
+                out_file.write("G01*\n")
+                _text_aperture = (self.text_size * (self.text_ratio / 100)) - 0.004
+                out_file.write("%ADD10C,{}*%\n".format(_text_aperture))
+                out_file.write("\n")
+                out_file.write("D10*\n")
 
-        # Repeat and Step x coords are determined dynamically based on text size
-        text_locations = {
-            "title": {"pos": [25.4, 5.3 - (self.text_size / 2)],
-                      "string": self.panel_info["title"]
-                      },
-            "date": {"pos": [25.4, 2.6 - (self.text_size / 2)],
-                     "string": datetime.datetime.now().strftime("%d/%b/%Y")
-                     },
-            "repeat": {"pos": [0, 5.3 - (self.text_size / 2)],
-                       "string": "Repeat: {} x {}".format(self.panel_info["repeat"][0], self.panel_info["repeat"][1])
-                       },
-            "step": {"pos": [0, 2.6 - (self.text_size / 2)],
-                     "string": "Step: {}mm x {}mm".format(round(self.panel_info["step"][0], 4), round(self.panel_info["step"][1], 4))
-                     }
-        }
+            # Repeat and Step x coords are determined dynamically based on text size
+            text_locations = {
+                "title": {"pos": [25.4, 5.3 - (self.text_size / 2)],
+                          "string": self.panel_info["title"]
+                          },
+                "date": {"pos": [25.4, 2.6 - (self.text_size / 2)],
+                         "string": datetime.datetime.now().strftime("%d/%b/%Y")
+                         },
+                "repeat": {"pos": [0, 5.3 - (self.text_size / 2)],
+                           "string": "Repeat: {} x {}".format(self.panel_info["repeat"][0], self.panel_info["repeat"][1])
+                           },
+                "step": {"pos": [0, 2.6 - (self.text_size / 2)],
+                         "string": "Step: {}mm x {}mm".format(round(self.panel_info["step"][0], 4),
+                                                              round(self.panel_info["step"][1], 4))
+                         }
+            }
 
-        # Title and Date are written first, get the length of those
-        _title_len = self._text_to_silk_mm(text_locations["title"]["string"])
-        _date_len = self._text_to_silk_mm(text_locations["date"]["string"])
-        _repeat_len = self._text_to_silk_mm(text_locations["repeat"]["string"])
-        _step_len = self._text_to_silk_mm(text_locations["step"]["string"])
+            # Title and Date are written first, get the length of those
+            _title_len = self._text_to_silk_mm(text_locations["title"]["string"])
+            _date_len = self._text_to_silk_mm(text_locations["date"]["string"])
+            _repeat_len = self._text_to_silk_mm(text_locations["repeat"]["string"])
+            _step_len = self._text_to_silk_mm(text_locations["step"]["string"])
 
-        # Add offset just calculated to the base location for the text
-        _text_x_offset = max(_title_len, _date_len) + 5
-        _base_x = text_locations["title"]["pos"][0]
-        text_locations["repeat"]["pos"][0] = _base_x + _text_x_offset
-        text_locations["step"]["pos"][0] = _base_x + _text_x_offset
+            # Add offset just calculated to the base location for the text
+            _text_x_offset = max(_title_len, _date_len) + 5
+            _base_x = text_locations["title"]["pos"][0]
+            text_locations["repeat"]["pos"][0] = _base_x + _text_x_offset
+            text_locations["step"]["pos"][0] = _base_x + _text_x_offset
 
-        # Find if the strings to be drawn are going to end up off the PCB
-        # Issue a warning to the user and ask for their input if this is the case
-        _max_text_x = max((_repeat_len + text_locations["repeat"]["pos"][0]), (_step_len + text_locations["step"]["pos"][0]))
-        self.logger.debug("Max silk X: {}".format(_max_text_x))
+            # Find if the strings to be drawn are going to end up off the PCB
+            # Issue a warning to the user and ask for their input if this is the case
+            _max_text_x = max((_repeat_len + text_locations["repeat"]["pos"][0]),
+                              (_step_len + text_locations["step"]["pos"][0]))
+            self.logger.debug("Max silk X: {}".format(_max_text_x))
 
-        _output_silk_layers = 1
-        if _max_text_x > (self.fid_coords[1][0] - (self.fid_soldermask_dia / 2)):
-            self.logger.warning("Silkscreen text on panel frame will extend beyond the edge of the panel")
-            self.logger.warning("Do you still want to output the silkscreen layer?")
-            self.logger.warning("The step and repeat information will still be output in the report file")
-            _output_silk_input = input("Ouput panel silkscreen: (*Y/N)") or "Y"
+            _output_silk_layers = 1
+            if _max_text_x > (self.fid_coords[1][0] - (self.fid_soldermask_dia / 2)):
+                self.logger.warning("Silkscreen text on panel frame will extend beyond the edge of the panel")
+                self.logger.warning("Do you still want to output the silkscreen layer?")
+                self.logger.warning("The step and repeat information will still be output in the report file")
+                _output_silk_input = input("Ouput panel silkscreen: (*Y/N)") or "Y"
 
-            if _output_silk_input == "N":
-                _output_silk_layers = 0
-                self.logger.info("Skipping silkscreen layer output")
-            elif _output_silk_input == "Y":
-                pass
-            else:
-                self.logger.warning("input '{}' not recognised, assuming 'Y'".format(_output_silk_layers))
+                if _output_silk_input == "N":
+                    _output_silk_layers = 0
+                    self.logger.info("Skipping silkscreen layer output")
+                elif _output_silk_input == "Y":
+                    pass
+                else:
+                    self.logger.warning("input '{}' not recognised, assuming 'Y'".format(_output_silk_layers))
 
-        if _output_silk_layers:
-            self.logger.info("Outputting silkscreen layers")
-            for text, value in text_locations.items():
-                x_start = value["pos"][0]
-                y_start = value["pos"][1]
-                _string = value["string"]
+            if _output_silk_layers:
+                self.logger.info("Outputting silkscreen layers")
+                for text, value in text_locations.items():
+                    x_start = value["pos"][0]
+                    y_start = value["pos"][1]
+                    _string = value["string"]
 
-                self._add_text_to_silk_file(_string, _file, x_start, y_start)
+                    mirror = False
+                    if _file == self.out_path / _file_names["bottom_silkscreen"]:
+                        # Mirror the text on the bottom
+                        mirror = True
+                        x_start = round(self.panel_info["width"], 6) - value["pos"][0]
 
-            if self.config["Fabrication"]["add_order_number_placeholder"].lower() == 'true':
-                _placeholder = self.config["Fabrication"]["order_number_placeholder_text"]
-                _placeholder_xstart = (self.panel_info["width"] / 2) - self._text_to_silk_mm(_placeholder)
-                _placeholder_ystart = self.panel_info["height"] - (_panel_width / 2) - (self.text_size / 2)
+                    self._add_text_to_silk_file(_string, _file, x_start, y_start, mirror)
 
-                self._add_text_to_silk_file(_placeholder, _file, _placeholder_xstart, _placeholder_ystart)
+                if _file == self.out_path / _file_names["top_silkscreen"]:
+                    # Only output placeholder to the top silkscreen file
+                    if self.config["Fabrication"]["add_order_number_placeholder"].lower() == 'true':
+                        _placeholder = self.config["Fabrication"]["order_number_placeholder_text"]
+                        _placeholder_xstart = (self.panel_info["width"] / 2) - self._text_to_silk_mm(_placeholder)
+                        _placeholder_ystart = self.panel_info["height"] - (_panel_width / 2) - (self.text_size / 2)
 
-        with open(_file, 'a') as out_file:
-            out_file.write("M02*\n")
+                        self._add_text_to_silk_file(_placeholder, _file, _placeholder_xstart, _placeholder_ystart)
+
+            with open(_file, 'a') as out_file:
+                out_file.write("M02*\n")
 
         # Write excellon drill file
         _file = self.out_path / _file_names["drills"]
@@ -447,9 +538,10 @@ class GerberGenerator:
         self._write_gerbers()
 
         _data = self._get_report_data()
-        _data["gerber_location"] = self._zip_output_dir()
+        if self.zip_output:
+            _data["gerber_location"] = self._zip_output_dir()
 
-        self._clean_output_dir()
+            self._clean_output_dir()
         self.logger.info("= Finished writing frame gerbers =")
 
         return _data
@@ -465,8 +557,8 @@ class GerberGenerator:
         while 1:
             if _panel_dims == [0, 0]:
                 try:
-                    _panel_dims[0] = float(input("Panel width: "))
-                    _panel_dims[1] = float(input("Panel height: "))
+                    _panel_dims[0] = float(input("Panel width (200): ") or 200)
+                    _panel_dims[1] = float(input("Panel height (230): ") or 230)
                 except ValueError:
                     self.logger.warning("Value must be a real number")
                     _panel_dims = [0, 0]
@@ -474,8 +566,8 @@ class GerberGenerator:
 
             if _pcb_step == [0, 0]:
                 try:
-                    _pcb_step[0] = int(input("PCB step X: "))
-                    _pcb_step[0] = int(input("PCB step Y: "))
+                    _pcb_step[0] = int(input("PCB step X (23): ") or 23)
+                    _pcb_step[1] = int(input("PCB step Y (30): ") or 30)
                 except ValueError:
                     self.logger.warning("Value must be an integer")
                     _pcb_step = [0, 0]
@@ -483,14 +575,16 @@ class GerberGenerator:
 
             if _pcb_repeat == [0, 0]:
                 try:
-                    _pcb_repeat[0] = int(input("PCB repeat X: "))
-                    _pcb_repeat[0] = int(input("PCB repeat Y: "))
+                    _pcb_repeat[0] = int(input("PCB repeat X (2): ") or 2)
+                    _pcb_repeat[1] = int(input("PCB repeat Y (3): ") or 3)
                 except ValueError:
                     self.logger.warning("Value must be an integer")
                     _pcb_repeat = [0, 0]
                     continue
 
-            _title = input("Frame title: ")
+            _title = input("Frame title (test 123): ") or "test 123"
+            self.zip_output = False
+            break
 
         self.make_frame_gerbers(_panel_dims, _pcb_step, _pcb_repeat, _title, Path.cwd(), _config)
 
